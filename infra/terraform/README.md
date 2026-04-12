@@ -13,22 +13,24 @@ aws sts get-caller-identity --profile brain
 # Tailscale account + an ACL that authorizes tag:brain for autogroup:admin
 # Generate a reusable pre-auth key at:
 #   https://login.tailscale.com/admin/settings/keys
-# Copy it (starts with tskey-auth-...)
+# Copy the key value — you'll paste it into the command below.
 
 # Seed the Tailscale pre-auth key into Secrets Manager BEFORE terraform apply.
 # The user data script fetches it on first boot.
+# Replace <<TAILSCALE_KEY>> with the value you just generated.
 aws secretsmanager create-secret \
     --profile brain \
     --name brain/tailscale_authkey \
     --description "Tailscale pre-auth key for brain-runner" \
-    --secret-string 'tskey-auth-PASTE-YOUR-KEY-HERE'
+    --secret-string '<<TAILSCALE_KEY>>'
 
 # (Optional, seeded later for the GitHub clone step)
+# Replace <<GITHUB_PAT>> with a fresh PAT scoped to repo on YogeshSeeni/second-brain.
 aws secretsmanager create-secret \
     --profile brain \
     --name brain/github_pat \
     --description "GitHub PAT with repo scope on YogeshSeeni/second-brain" \
-    --secret-string 'ghp_PASTE-A-FRESH-PAT-HERE'
+    --secret-string '<<GITHUB_PAT>>'
 ```
 
 ## Apply
