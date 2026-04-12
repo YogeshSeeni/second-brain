@@ -1,0 +1,52 @@
+# Compose file for the brain-runner EC2 host.
+# Run from /var/brain/infra/docker on the instance:
+#   docker compose build
+#   docker compose up -d
+#
+# Two services:
+#   runner     — Claude Code + cron, the workhorse
+#   playwright — @playwright/mcp sidecar for Canvas/LC/Workday scraping
+#
+# Both mount /var/brain (the vault clone) so Claude can read/write it.
+
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: brain/runner:latest
+    container_name: brain-runner
+    restart: unless-stopped
+    environment:
+      AWS_REGION: us-west-2
+      TZ: America/Los_Angeles
+      PATH: /usr/local/bin:/usr/bin:/bin
+    volumes:
+      - /var/brain:/var/brain
+      - brain-claude:/home/runner/.claude
+      - brain-cron-log:/var/log/claude-cron
+    depends_on:
+      - playwright
+    networks:
+      - brain-net
+    # Use host's IAM role via instance metadata — no credentials needed in the
+    # container; aws cli picks up IMDSv2 transparently.
+
+  playwright:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    container_name: brain-playwright
+    restart: unless-stopped
+    environment:
+      TZ: America/Los_Angeles
+    networks:
+      - brain-net
+    # Playwright MCP exposes stdio/sse on 8931 — runner talks to it over the
+    # internal docker network.
+
+volumes:
+  brain-claude:
+  brain-cron-log:
+
+networks:
+  brain-net:
+    driver: bridge

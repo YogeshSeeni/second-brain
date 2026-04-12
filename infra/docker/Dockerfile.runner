@@ -1,0 +1,49 @@
+# Runner image — Claude Code + Node + git + cron, arm64.
+#
+# Built directly on the EC2 host (no ECR) to keep tonight's rollout simple.
+# To build:
+#   docker build -t brain/runner -f Dockerfile.runner .
+
+FROM node:22-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=America/Los_Angeles \
+    NODE_ENV=production \
+    PATH=/usr/local/bin:/usr/bin:/bin
+
+# Base tools
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git jq tini cron \
+        python3 python3-pip \
+        tzdata unzip procps \
+        less vim \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+# AWS CLI v2 (arm64) — used by entrypoint.sh to fetch secrets
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code \
+    && claude --version
+
+# Non-root user matching the host ubuntu uid (1000)
+RUN useradd -m -u 1000 -s /bin/bash runner \
+    && mkdir -p /var/brain /home/runner/.claude /var/log/claude-cron \
+    && chown -R runner:runner /var/brain /home/runner/.claude /var/log/claude-cron
+
+# Entrypoint
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /var/brain
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+# Default: run cron in the foreground. Override with `docker compose run` to
+# drop into an interactive shell.
+CMD ["cron", "-f"]
