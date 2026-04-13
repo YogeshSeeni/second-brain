@@ -173,12 +173,15 @@ async def _supervise(task_id: int, thread_id: str, prompt: str) -> None:
                 continue
 
             # Terminal result carries the authoritative final text.
+            # Note: subtype="success" can still have is_error=true when claude
+            # ran to completion but the model call itself errored (e.g. auth).
             if obj.get("type") == "result":
-                if obj.get("subtype") == "success":
-                    final_text = obj.get("result") or None
-                elif obj.get("is_error"):
+                if obj.get("is_error"):
                     err = obj.get("result") or "claude returned error"
                     await queue.put(StreamChunk("error", str(err)))
+                    final_text = f"[error] {err}"
+                elif obj.get("subtype") == "success":
+                    final_text = obj.get("result") or None
                 continue
 
             # Everything else flows through the stream_event parser.
