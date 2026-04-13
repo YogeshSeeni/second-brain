@@ -189,3 +189,18 @@ async def run_job_now(name: str) -> dict:
 async def get_dashboard() -> dict:
     """Aggregated today view for the / route."""
     return await dashboard.get_today()
+
+
+@app.get("/api/nudges")
+async def get_nudges(limit: int = 20) -> list[dict]:
+    """List unacknowledged nudges, newest first."""
+    return await db.unacked_nudges(limit)
+
+
+@app.post("/api/nudges/{nudge_id}/ack")
+async def ack_nudge(nudge_id: int) -> dict:
+    """Mark a nudge as acknowledged."""
+    ok = await db.ack_nudge(nudge_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="nudge not found or already acked")
+    return {"ok": True, "id": nudge_id}

@@ -101,3 +101,7 @@ export type DashboardResponse = {
 export function getDashboard(): Promise<DashboardResponse> {
   return json("/api/dashboard");
 }
+
+export function ackNudge(id: number): Promise<{ ok: boolean; id: number }> {
+  return json(`/api/nudges/${id}/ack`, { method: "POST" });
+}

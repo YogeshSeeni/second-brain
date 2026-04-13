@@ -337,3 +337,42 @@ async def unacked_nudges(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def create_nudge(
+    kind: str, body: str, source_ref: str | None = None
+) -> int:
+    """Insert a nudge row and return its id. Dedupes on (kind, source_ref)
+    when source_ref is set so the tick doesn't pile up duplicates."""
+    now = _now()
+    async with aiosqlite.connect(DB_PATH) as db:
+        if source_ref:
+            async with db.execute(
+                "SELECT id FROM nudges WHERE kind = ? AND source_ref = ? "
+                "AND acknowledged_at IS NULL LIMIT 1",
+                (kind, source_ref),
+            ) as cur:
+                existing = await cur.fetchone()
+                if existing:
+                    return int(existing[0])
+        cur = await db.execute(
+            "INSERT INTO nudges (kind, body, source_ref, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (kind, body, source_ref, now),
+        )
+        nudge_id = cur.lastrowid
+        await db.commit()
+    assert nudge_id is not None
+    return nudge_id
+
+
+async def ack_nudge(nudge_id: int) -> bool:
+    """Mark a nudge acknowledged. Returns True if a row was updated."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE nudges SET acknowledged_at = ? "
+            "WHERE id = ? AND acknowledged_at IS NULL",
+            (_now(), nudge_id),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
