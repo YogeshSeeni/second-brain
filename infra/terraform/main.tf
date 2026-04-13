@@ -119,19 +119,34 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 }
 
 resource "aws_iam_role_policy" "secrets" {
-  name = "brain-secrets-read"
+  name = "brain-secrets-rw"
   role = aws_iam_role.brain.id
 
+  # PutSecretValue is scoped to brain/claude_credentials only — the runner
+  # writes refreshed Claude Code OAuth tokens back to this one secret so a
+  # reboot never resurrects a stale refresh token. Other brain/* secrets
+  # (github_pat, whoop, etc.) remain read-only.
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:DescribeSecret"
-      ]
-      Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:brain/*"
-    }]
+    Statement = [
+      {
+        Sid    = "ReadAllBrainSecrets"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:brain/*"
+      },
+      {
+        Sid    = "WriteClaudeCredentialsOnly"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:PutSecretValue"
+        ]
+        Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:brain/claude_credentials-*"
+      }
+    ]
   })
 }
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Sync Claude Code OAuth credentials to AWS Secrets Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/brain
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=AWS_REGION=us-west-2
+Environment=CLAUDE_SECRET_NAME=brain/claude_credentials
+Environment=CLAUDE_CREDS_PATH=/home/ubuntu/.claude/.credentials.json
+Environment=BRAIN_STATE_DIR=/var/brain/.scripts/state
+EnvironmentFile=-/etc/brain/brain-core.env
+ExecStart=/var/brain/.scripts/sync-claude-creds.sh

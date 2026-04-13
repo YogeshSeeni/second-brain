@@ -157,6 +157,46 @@ open https://brain-yogesh.duckdns.org
 
 From iPhone Safari: same URL, Google sign-in, land on today dashboard.
 
+## Claude OAuth auto-refresh (#34)
+
+The `claude` CLI rotates its refresh token on every call. If the host reboots
+before the latest blob is back in Secrets Manager, `entrypoint.sh` will pull
+a stale token and every subsequent job will fail with `auth: refresh token
+invalid`. The sync script + systemd timer below close that loop.
+
+1. Reapply terraform so the instance role picks up `PutSecretValue` on
+   `brain/claude_credentials` (added in `main.tf`):
+   ```bash
+   cd infra/terraform
+   terraform plan    # should show: aws_iam_role_policy.secrets update-in-place
+   terraform apply
+   ```
+
+2. On EC2 (via `aws ssm start-session`), install the timer unit — the script
+   itself already lives in the repo at `/var/brain/.scripts/sync-claude-creds.sh`:
+   ```bash
+   cd /var/brain && git pull --rebase --autostash
+   sudo install -m 0644 /var/brain/infra/ec2/systemd/claude-creds-sync.service /etc/systemd/system/
+   sudo install -m 0644 /var/brain/infra/ec2/systemd/claude-creds-sync.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now claude-creds-sync.timer
+   sudo systemctl list-timers claude-creds-sync.timer
+   ```
+
+3. Smoke test:
+   ```bash
+   # Force an immediate run even if the timer hasn't elapsed
+   sudo systemctl start claude-creds-sync.service
+   sudo journalctl -u claude-creds-sync.service -n 30 --no-pager
+   # First run after install: "credentials changed … pushing to brain/claude_credentials"
+   # Subsequent runs: silent (hash match, fast path)
+   ```
+
+The same script is invoked from `run-job.sh` at the end of every job (so an
+interactive refresh during a cron run also gets pushed). Inside the docker
+runner, the crontab template at `.scripts/cron/crontab.template` has a
+`*/5 * * * *` entry as a belt-and-braces safety net.
+
 ## What's NOT in this phase
 
 - Whoop V2 OAuth seeding — separate step, see below.
