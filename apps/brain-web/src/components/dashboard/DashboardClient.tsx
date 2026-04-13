@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getDashboard, type DashboardResponse } from "@/lib/api";
+import { ackNudge, getDashboard, type DashboardResponse } from "@/lib/api";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
@@ -30,6 +30,29 @@ function recoveryTone(score: number | null): "ok" | "warn" | "error" | "default"
 export function DashboardClient() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [ackingIds, setAckingIds] = useState<Set<number>>(new Set());
+
+  async function handleAck(id: number) {
+    setAckingIds((s) => new Set(s).add(id));
+    setData((d) =>
+      d ? { ...d, nudges: d.nudges.filter((n) => n.id !== id) } : d,
+    );
+    try {
+      await ackNudge(id);
+    } catch (e) {
+      setErr((e as Error).message);
+      try {
+        const fresh = await getDashboard();
+        setData(fresh);
+      } catch {}
+    } finally {
+      setAckingIds((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -168,11 +191,24 @@ export function DashboardClient() {
             ) : (
               <ul className="space-y-2">
                 {nudges.map((n) => (
-                  <li key={n.id} className="text-xs text-zinc-300">
-                    <div className="text-[10px] uppercase tracking-widest text-zinc-600">
-                      {n.kind}
+                  <li
+                    key={n.id}
+                    className="flex items-start gap-2 text-xs text-zinc-300"
+                  >
+                    <div className="flex-1">
+                      <div className="text-[10px] uppercase tracking-widest text-zinc-600">
+                        {n.kind}
+                      </div>
+                      {n.body}
                     </div>
-                    {n.body}
+                    <button
+                      type="button"
+                      onClick={() => handleAck(n.id)}
+                      disabled={ackingIds.has(n.id)}
+                      className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[10px] uppercase tracking-widest text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
+                    >
+                      ack
+                    </button>
                   </li>
                 ))}
               </ul>
