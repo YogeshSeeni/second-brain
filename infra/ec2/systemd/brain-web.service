@@ -1,0 +1,20 @@
+[Unit]
+Description=Brain Web Next.js UI
+After=network-online.target brain-core.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/brain/apps/brain-web
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
+Environment=NEXT_PUBLIC_BRAIN_CORE_URL=http://localhost:8000
+ExecStart=/usr/bin/npx next start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
