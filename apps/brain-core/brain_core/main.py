@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, capture, dashboard, db, jobs, tick
+from . import agent, capture, dashboard, db, jobs, tick, watcher
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -21,7 +21,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await db.init()
-    yield
+    watcher_handle = await watcher.start_watcher(watcher.VAULT_PATH)
+    try:
+        yield
+    finally:
+        if watcher_handle is not None:
+            await watcher_handle.aclose()
 
 
 app = FastAPI(title="brain-core", lifespan=lifespan)
