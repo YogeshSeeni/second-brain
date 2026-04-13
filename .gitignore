@@ -27,3 +27,19 @@ infra/terraform/.terraform.lock.hcl
 
 # Docker build artifacts
 infra/docker/.build/
+
+# Python venvs + SQLite runtime state
+apps/brain-core/.venv/
+apps/brain-core/db/
+apps/brain-core/__pycache__/
+apps/brain-core/brain_core/__pycache__/
+apps/brain-core/*.egg-info/
+apps/brain-core/uv.lock
+**/__pycache__/
+*.pyc
+
+# Node
+apps/brain-web/node_modules/
+apps/brain-web/.next/
+apps/brain-web/out/
+apps/brain-web/.env.local
