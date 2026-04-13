@@ -72,6 +72,11 @@ async def post_chat(req: ChatRequest) -> ChatResponse:
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
 
+    # Cancel any in-flight turn on this thread before the new one goes in.
+    interrupted = await agent.interrupt_thread(thread_id)
+    if interrupted:
+        logger.info("interrupted tasks %s on thread %s", interrupted, thread_id)
+
     await db.insert_message(thread_id, "user", req.body, task_id=None)
     prompt_hash = hashlib.sha256(req.body.encode("utf-8")).hexdigest()
     task_id = await db.create_agent_task(thread_id, "message", prompt_hash)

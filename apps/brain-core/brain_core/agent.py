@@ -15,9 +15,11 @@ downstream — see main.py._sse.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import signal
 from typing import Any, AsyncIterator
 
 from . import db
@@ -43,6 +45,7 @@ class StreamChunk:
 _processes: dict[int, asyncio.subprocess.Process] = {}
 _queues: dict[int, asyncio.Queue[StreamChunk | None]] = {}
 _tasks: dict[int, asyncio.Task[None]] = {}
+_interrupted: set[int] = set()
 
 
 def _build_prompt(user_body: str, history: list[dict]) -> str:
@@ -193,7 +196,14 @@ async def _supervise(task_id: int, thread_id: str, prompt: str) -> None:
         await proc.wait()
         await stderr_task
 
-        if proc.returncode == 0:
+        if task_id in _interrupted:
+            partial = "".join(text_buf).strip()
+            body = partial or "[interrupted]"
+            if partial:
+                body = f"{partial}\n\n[interrupted]"
+            await db.insert_message(thread_id, "assistant", body, task_id)
+            await db.set_task_state(task_id, "interrupted", pid=proc.pid)
+        elif proc.returncode == 0:
             full = (final_text or "".join(text_buf)).strip()
             if not full:
                 full = "[empty reply]"
@@ -218,6 +228,7 @@ async def _supervise(task_id: int, thread_id: str, prompt: str) -> None:
     finally:
         await queue.put(None)
         _processes.pop(task_id, None)
+        _interrupted.discard(task_id)
 
 
 async def start_turn(task_id: int, thread_id: str, user_body: str) -> None:
@@ -230,6 +241,35 @@ async def start_turn(task_id: int, thread_id: str, user_body: str) -> None:
     prompt = _build_prompt(user_body, history)
     _queues[task_id] = asyncio.Queue()
     _tasks[task_id] = asyncio.create_task(_supervise(task_id, thread_id, prompt))
+
+
+async def interrupt_thread(thread_id: str) -> list[int]:
+    """SIGINT any in-flight supervisors on this thread, wait briefly for
+    clean shutdown, and return the task ids that were interrupted. Safe to
+    call when no task is running."""
+    task_ids = await db.running_tasks_on_thread(thread_id)
+    interrupted: list[int] = []
+    for tid in task_ids:
+        proc = _processes.get(tid)
+        sup_task = _tasks.get(tid)
+        if proc is None or proc.returncode is not None:
+            continue
+        _interrupted.add(tid)
+        try:
+            proc.send_signal(signal.SIGINT)
+        except ProcessLookupError:
+            _interrupted.discard(tid)
+            continue
+        interrupted.append(tid)
+        if sup_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(sup_task), timeout=5.0)
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(sup_task), timeout=3.0)
+    return interrupted
 
 
 async def subscribe(task_id: int) -> AsyncIterator[StreamChunk]:

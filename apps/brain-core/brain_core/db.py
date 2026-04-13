@@ -247,6 +247,17 @@ async def get_task(task_id: int) -> dict[str, Any] | None:
             return dict(row) if row else None
 
 
+async def running_tasks_on_thread(thread_id: str) -> list[int]:
+    """Return ids of agent_tasks on a thread currently in flight."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM agent_tasks WHERE thread_id = ? "
+            "AND state IN ('queued', 'running') ORDER BY id ASC",
+            (thread_id,),
+        ) as cur:
+            return [int(r[0]) for r in await cur.fetchall()]
+
+
 async def create_job_run(name: str, trigger: str, stdout_path: str | None) -> int:
     """Insert a job_runs row in 'running' state and return its id."""
     now = _now()

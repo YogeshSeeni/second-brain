@@ -13,14 +13,20 @@ export default function ChatPanel() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolCall[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
 
+  useEffect(() => () => esRef.current?.close(), []);
+
   async function send() {
     const body = input.trim();
-    if (!body || streaming) return;
+    if (!body) return;
+    // Close any in-flight stream so the new turn's events don't race.
+    esRef.current?.close();
+    esRef.current = null;
     setInput("");
     setMessages((m) => [...m, { role: "user", body }, { role: "assistant", body: "" }]);
     setTools([]);
@@ -29,6 +35,7 @@ export default function ChatPanel() {
       const { task_id, thread_id } = await postChat(body, threadId);
       setThreadId(thread_id);
       const es = new EventSource(streamUrl(task_id));
+      esRef.current = es;
       es.addEventListener("delta", (e) => {
         const chunk = (e as MessageEvent).data as string;
         setMessages((m) => {
@@ -64,11 +71,17 @@ export default function ChatPanel() {
       });
       es.addEventListener("done", () => {
         es.close();
-        setStreaming(false);
+        if (esRef.current === es) {
+          esRef.current = null;
+          setStreaming(false);
+        }
       });
       es.addEventListener("error", () => {
         es.close();
-        setStreaming(false);
+        if (esRef.current === es) {
+          esRef.current = null;
+          setStreaming(false);
+        }
       });
     } catch (err) {
       setMessages((m) => {
@@ -121,12 +134,13 @@ export default function ChatPanel() {
           <textarea
             className="w-full resize-none rounded border border-zinc-800 bg-zinc-950 p-2 text-sm text-zinc-100 outline-none focus:border-zinc-600"
             placeholder={
-              streaming ? "…" : "message (enter to send, shift+enter for newline)"
+              streaming
+                ? "streaming… (enter to interrupt and send a new turn)"
+                : "message (enter to send, shift+enter for newline)"
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={streaming}
             rows={2}
           />
         </div>
