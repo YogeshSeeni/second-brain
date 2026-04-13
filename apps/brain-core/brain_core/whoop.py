@@ -60,6 +60,19 @@ def _load_creds_from_secrets() -> dict[str, Any] | None:
         return None
 
 
+def _persist_creds_to_secrets(creds: dict[str, Any]) -> None:
+    """Write rotated creds back so the next poll picks up the new refresh token."""
+    try:
+        import boto3
+    except ImportError:
+        return
+    try:
+        client = boto3.client("secretsmanager", region_name=REGION)
+        client.put_secret_value(SecretId=SECRET_NAME, SecretString=json.dumps(creds))
+    except Exception as exc:
+        logger.warning("failed to persist %s: %s", SECRET_NAME, exc)
+
+
 def _load_creds() -> dict[str, Any] | None:
     return _load_creds_from_env() or _load_creds_from_secrets()
 
@@ -102,8 +115,8 @@ async def _access_token() -> str | None:
     refreshed = await _refresh(creds)
     if not refreshed:
         return None
-    # NB: persisting refreshed creds back to secrets manager is a Day 3 task;
-    # for now, rely on expires_at being short and refreshing each poll.
+    if refreshed.get("refresh_token") != creds.get("refresh_token"):
+        _persist_creds_to_secrets(refreshed)
     return refreshed["access_token"]
 
 

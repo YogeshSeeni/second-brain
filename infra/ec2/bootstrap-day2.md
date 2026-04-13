@@ -166,22 +166,28 @@ From iPhone Safari: same URL, Google sign-in, land on today dashboard.
 
 ## Whoop OAuth (5-minute manual, Mon morning)
 
-Register a developer app at `https://developer.whoop.com`, scopes
-`read:recovery read:sleep read:workout read:cycle read:profile offline`, add
-`http://localhost:8765/callback` as a redirect. Run a one-shot local
-OAuth flow to exchange the authorization code for a refresh token, then:
+1. Register a developer app at `https://developer.whoop.com`:
+   - Scopes: `read:recovery read:sleep read:workout read:cycle read:profile offline`
+   - Redirect URI: `http://localhost:8765/callback`
+   - Save the client ID and client secret.
 
-```bash
-aws secretsmanager create-secret --name brain/whoop_oauth --region us-west-2 \
-  --secret-string '{"access_token":"...","refresh_token":"...","expires_at":0}'
+2. **On your Mac**, run the bootstrap helper (it opens the authorize URL in
+   your browser, catches the redirect, exchanges the code, and writes
+   `brain/whoop_oauth` to Secrets Manager):
+   ```bash
+   WHOOP_CLIENT_ID=<id> WHOOP_CLIENT_SECRET=<secret> AWS_PROFILE=brain \
+     python3 .scripts/whoop-oauth-bootstrap.py
+   ```
 
-# Add client credentials to brain-core env
-sudo tee -a /etc/brain/brain-core.env > /dev/null <<EOF
-BRAIN_WHOOP_CLIENT_ID=<client id>
-BRAIN_WHOOP_CLIENT_SECRET=<client secret>
-EOF
-sudo systemctl restart brain-core
-```
+3. Add the client credentials to brain-core's env on EC2 (via SSM):
+   ```bash
+   sudo tee -a /etc/brain/brain-core.env > /dev/null <<EOF
+   BRAIN_WHOOP_CLIENT_ID=<client id>
+   BRAIN_WHOOP_CLIENT_SECRET=<client secret>
+   EOF
+   sudo systemctl restart brain-core
+   ```
 
-The scaffold in `apps/brain-core/brain_core/whoop.py` picks up creds
-automatically once seeded — no code changes needed.
+Once seeded, `apps/brain-core/brain_core/whoop.py` picks up the creds from
+Secrets Manager on every call and rotates refresh tokens back into the same
+secret when Whoop issues a new one.
