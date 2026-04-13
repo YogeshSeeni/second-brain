@@ -36,7 +36,8 @@ def _read_priorities() -> list[str]:
         stripped = raw.strip()
         if not stripped:
             continue
-        item = re.sub(r"^[\-\*\d\.\)\s]+", "", stripped).strip()
+        item = re.sub(r"^[\-\*\d\.\)\s]+", "", stripped)
+        item = item.replace("**", "").strip()
         if item:
             lines.append(item)
         if len(lines) >= 3:

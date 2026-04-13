@@ -17,8 +17,21 @@
         reverse_proxy 127.0.0.1:3000
     }
 
-    # Everything else under /api/* belongs to brain-core (FastAPI).
+    # Caddy's own session-check endpoint is on brain-web too, and must not
+    # be gated (it IS the gate).
+    handle /api/auth-check {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    # Everything else under /api/* belongs to brain-core (FastAPI). Before
+    # forwarding, Caddy calls /api/auth-check on brain-web with the original
+    # cookies — a 200 means the caller has a valid NextAuth session and the
+    # request is allowed through. 401 kicks it back to the client.
     handle /api/* {
+        forward_auth 127.0.0.1:3000 {
+            uri /api/auth-check
+            copy_headers Cookie
+        }
         reverse_proxy 127.0.0.1:8000 {
             flush_interval -1  # stream SSE events as they arrive
         }
