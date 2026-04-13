@@ -48,8 +48,21 @@ _tasks: dict[int, asyncio.Task[None]] = {}
 _interrupted: set[int] = set()
 
 
-def _build_prompt(user_body: str, history: list[dict]) -> str:
-    system = build_system_prompt()
+def _build_prompt(
+    user_body: str,
+    history: list[dict],
+    thread: dict | None = None,
+) -> str:
+    kind = (thread or {}).get("kind", "main")
+    title = (thread or {}).get("title")
+    recent_user = [
+        m["body"] for m in history if m.get("role") == "user"
+    ][-3:] + [user_body]
+    system = build_system_prompt(
+        thread_kind=kind,
+        thread_title=title,
+        recent_user_messages=recent_user,
+    )
     lines = [system, "\n\n# Conversation\n"]
     for msg in history:
         role = msg["role"]
@@ -238,7 +251,8 @@ async def start_turn(task_id: int, thread_id: str, user_body: str) -> None:
     # row if it matches so _build_prompt can append the user turn itself
     if history and history[-1]["role"] == "user" and history[-1]["body"] == user_body:
         history = history[:-1]
-    prompt = _build_prompt(user_body, history)
+    thread = await db.get_thread(thread_id)
+    prompt = _build_prompt(user_body, history, thread)
     _queues[task_id] = asyncio.Queue()
     _tasks[task_id] = asyncio.create_task(_supervise(task_id, thread_id, prompt))
 

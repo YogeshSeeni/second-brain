@@ -1,9 +1,9 @@
-import ChatPanel from "@/components/chat/ChatPanel";
+import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 
 export const metadata = {
   title: "brain / chat",
 };
 
 export default function ChatPage() {
-  return <ChatPanel />;
+  return <ChatWorkspace />;
 }

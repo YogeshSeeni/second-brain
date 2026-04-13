@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, capture, dashboard, db, jobs, tick, watcher
+from . import agent, capture, dashboard, db, jobs, thesis, tick, watcher
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -58,6 +58,11 @@ class MessageRequest(BaseModel):
 
 class CaptureRequest(BaseModel):
     body: str
+
+
+class CreateThreadRequest(BaseModel):
+    title: str
+    kind: str = "topic"
 
 
 @app.get("/api/health")
@@ -142,6 +147,22 @@ async def get_threads() -> list[dict]:
     return await db.list_threads()
 
 
+@app.post("/api/threads")
+async def create_thread(req: CreateThreadRequest) -> dict:
+    """Create a new thread. Default kind='topic'; main threads use ensure_main_thread."""
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    if req.kind not in ("topic", "main"):
+        raise HTTPException(status_code=400, detail="kind must be 'topic' or 'main'")
+    if req.kind == "main":
+        thread_id = await db.ensure_main_thread()
+    else:
+        thread_id = await db.create_thread("topic", title)
+    thread = await db.get_thread(thread_id)
+    return thread or {"id": thread_id, "kind": req.kind, "title": title}
+
+
 @app.get("/api/threads/{thread_id}/messages")
 async def get_messages(thread_id: str) -> list[dict]:
     """Return all messages on a thread in chronological order."""
@@ -203,6 +224,12 @@ async def run_job_now(name: str) -> dict:
 async def get_dashboard() -> dict:
     """Aggregated today view for the / route."""
     return await dashboard.get_today()
+
+
+@app.get("/api/thesis")
+async def get_thesis() -> dict:
+    """Four axis summaries + recent evidence for the /thesis route."""
+    return await thesis.get_thesis()
 
 
 @app.get("/api/nudges")

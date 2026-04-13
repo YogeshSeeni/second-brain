@@ -105,3 +105,61 @@ export function getDashboard(): Promise<DashboardResponse> {
 export function ackNudge(id: number): Promise<{ ok: boolean; id: number }> {
   return json(`/api/nudges/${id}/ack`, { method: "POST" });
 }
+
+export type ThesisAxis = {
+  axis: "research" | "industry" | "skills" | "optionality";
+  present: boolean;
+  confidence: number | null;
+  confidence_raw?: string | null;
+  updated: string | null;
+  stance: string;
+  open_questions: string[];
+};
+
+export type ThesisEvidenceRow = {
+  date: string;
+  axis: string;
+  claim: string;
+};
+
+export type ThesisResponse = {
+  axes: ThesisAxis[];
+  evidence: ThesisEvidenceRow[];
+};
+
+export function getThesis(): Promise<ThesisResponse> {
+  return json("/api/thesis");
+}
+
+export type Thread = {
+  id: string;
+  kind: "main" | "topic";
+  title: string | null;
+  created_at: number;
+  updated_at: number;
+  summary_path: string | null;
+};
+
+export function listThreads(): Promise<Thread[]> {
+  return json("/api/threads");
+}
+
+export function createThread(title: string): Promise<Thread> {
+  return json("/api/threads", {
+    method: "POST",
+    body: JSON.stringify({ title, kind: "topic" }),
+  });
+}
+
+export type Message = {
+  id: number;
+  thread_id: string;
+  role: "user" | "assistant" | "system" | "job";
+  body: string;
+  created_at: number;
+  task_id: number | null;
+};
+
+export function listMessages(threadId: string): Promise<Message[]> {
+  return json(`/api/threads/${encodeURIComponent(threadId)}/messages`);
+}

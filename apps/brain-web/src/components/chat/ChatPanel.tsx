@@ -1,19 +1,53 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { postChat, streamUrl } from "@/lib/api";
+import { listMessages, postChat, streamUrl } from "@/lib/api";
 
-type Msg = { role: "user" | "assistant"; body: string };
+type Msg = { role: "user" | "assistant" | "system" | "job"; body: string };
 type ToolCall = { index: number; name: string; state: "running" | "done" };
 
-export default function ChatPanel() {
+export type ChatPanelProps = {
+  initialThreadId?: string | null;
+  threadLabel?: string;
+};
+
+export default function ChatPanel({
+  initialThreadId = null,
+  threadLabel = "main thread",
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [tools, setTools] = useState<ToolCall[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(Boolean(initialThreadId));
   const scrollRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    setThreadId(initialThreadId);
+    setMessages([]);
+    setTools([]);
+    setLoadingHistory(Boolean(initialThreadId));
+    if (!initialThreadId) return;
+    let active = true;
+    (async () => {
+      try {
+        const rows = await listMessages(initialThreadId);
+        if (!active) return;
+        setMessages(
+          rows.map((r) => ({ role: r.role, body: r.body })),
+        );
+      } catch {
+        /* ignore — empty history is fine */
+      } finally {
+        if (active) setLoadingHistory(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [initialThreadId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -24,7 +58,6 @@ export default function ChatPanel() {
   async function send() {
     const body = input.trim();
     if (!body) return;
-    // Close any in-flight stream so the new turn's events don't race.
     esRef.current?.close();
     esRef.current = null;
     setInput("");
@@ -110,10 +143,13 @@ export default function ChatPanel() {
     <div className="flex h-full min-h-0 flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="border-b border-zinc-900 px-4 py-2 text-[11px] uppercase tracking-widest text-zinc-500">
-          main thread
+          {threadLabel}
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-          {messages.length === 0 && (
+          {loadingHistory && (
+            <p className="text-xs text-zinc-600">loading history…</p>
+          )}
+          {!loadingHistory && messages.length === 0 && (
             <p className="text-xs text-zinc-600">type a message to begin</p>
           )}
           {messages.map((m, i) => (
