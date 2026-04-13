@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly DuckDNS refresh for brain
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=brain-duckdns.service
+
+[Install]
+WantedBy=timers.target

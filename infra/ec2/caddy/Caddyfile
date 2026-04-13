@@ -1,0 +1,34 @@
+# /etc/caddy/Caddyfile — rendered on deploy with $BRAIN_HOST substituted.
+#
+# Caddy terminates TLS (Let's Encrypt via HTTP-01 on :80) and reverse-proxies
+# to brain-web on :3000. brain-core stays bound to 127.0.0.1:8000 and is NOT
+# exposed — the browser hits brain-web which makes server-side calls, or the
+# existing client-side SSE fetches go through the same origin.
+#
+# To switch the browser to same-origin calls (recommended once Caddy is live),
+# set NEXT_PUBLIC_BRAIN_CORE_URL="" in brain-web.service and add the /api
+# reverse_proxy block below.
+
+{$BRAIN_HOST} {
+    encode zstd gzip
+
+    # Reverse-proxy /api/* to brain-core so the browser speaks same-origin.
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000 {
+            flush_interval -1  # stream SSE events as they arrive
+        }
+    }
+
+    # Everything else → brain-web (Next.js)
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format json
+    }
+}

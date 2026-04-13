@@ -79,6 +79,40 @@ CREATE TABLE IF NOT EXISTS gtasks_seen (
   status TEXT,
   last_seen INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS job_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  state TEXT NOT NULL,
+  exit_code INTEGER,
+  stdout_path TEXT,
+  files_touched INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_runs_name_started
+  ON job_runs (name, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS whoop_recovery (
+  cycle_id TEXT PRIMARY KEY,
+  start_at INTEGER NOT NULL,
+  end_at INTEGER,
+  recovery_score INTEGER,
+  hrv_ms REAL,
+  resting_hr INTEGER,
+  last_seen INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS whoop_sleep (
+  sleep_id TEXT PRIMARY KEY,
+  start_at INTEGER NOT NULL,
+  end_at INTEGER NOT NULL,
+  total_ms INTEGER,
+  performance_pct INTEGER,
+  last_seen INTEGER NOT NULL
+);
 """
 
 
@@ -211,3 +245,95 @@ async def get_task(task_id: int) -> dict[str, Any] | None:
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def create_job_run(name: str, trigger: str, stdout_path: str | None) -> int:
+    """Insert a job_runs row in 'running' state and return its id."""
+    now = _now()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO job_runs (name, trigger, started_at, state, stdout_path) "
+            "VALUES (?, ?, ?, 'running', ?)",
+            (name, trigger, now, stdout_path),
+        )
+        run_id = cur.lastrowid
+        await db.commit()
+    assert run_id is not None
+    return run_id
+
+
+async def finish_job_run(
+    run_id: int,
+    state: str,
+    exit_code: int | None,
+    files_touched: int | None,
+) -> None:
+    """Mark a job_runs row terminal."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE job_runs SET state = ?, exit_code = ?, files_touched = ?, ended_at = ? "
+            "WHERE id = ?",
+            (state, exit_code, files_touched, _now(), run_id),
+        )
+        await db.commit()
+
+
+async def get_job_run(run_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM job_runs WHERE id = ?", (run_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def latest_job_run(name: str) -> dict[str, Any] | None:
+    """Return the most recent run for a given job name, or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM job_runs WHERE name = ? ORDER BY started_at DESC LIMIT 1",
+            (name,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def recent_job_runs(limit: int = 20) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM job_runs ORDER BY started_at DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def recent_agent_tasks(limit: int = 20) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM agent_tasks ORDER BY started_at DESC LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def latest_whoop_recovery() -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM whoop_recovery ORDER BY start_at DESC LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def unacked_nudges(limit: int = 10) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM nudges WHERE acknowledged_at IS NULL "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]

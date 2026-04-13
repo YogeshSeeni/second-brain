@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh DuckDNS record for brain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/duckdns-update.sh
+StandardOutput=append:/var/log/brain-duckdns.log
+StandardError=append:/var/log/brain-duckdns.log

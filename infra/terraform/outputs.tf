@@ -12,3 +12,8 @@ output "ssm_command" {
   description = "Ready-to-run SSM session command"
   value       = "aws ssm start-session --target ${aws_instance.brain.id} --profile ${var.profile} --region ${var.region}"
 }
+
+output "public_ip" {
+  description = "Elastic IP for the brain instance. Point DuckDNS A record at this."
+  value       = aws_eip.brain.public_ip
+}

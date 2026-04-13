@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, db, tick
+from . import agent, capture, dashboard, db, jobs, tick
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -49,6 +49,10 @@ class MessageRequest(BaseModel):
     role: str
     body: str
     task_id: int | None = None
+
+
+class CaptureRequest(BaseModel):
+    body: str
 
 
 @app.get("/api/health")
@@ -149,3 +153,39 @@ async def post_message(thread_id: str, req: MessageRequest) -> dict:
 async def post_tick() -> dict:
     """Trigger the tick routine (stub for tonight)."""
     return await tick.run_tick(trigger="http")
+
+
+@app.post("/api/capture")
+async def post_capture(req: CaptureRequest) -> dict:
+    """Classify a capture and file it into the vault."""
+    if not req.body.strip():
+        raise HTTPException(status_code=400, detail="empty capture")
+    try:
+        return await capture.capture(req.body)
+    except Exception as exc:
+        logger.exception("capture failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"capture failed: {exc}") from exc
+
+
+@app.get("/api/jobs")
+async def get_jobs() -> list[dict]:
+    """List every registered job with its last run."""
+    return await jobs.list_jobs()
+
+
+@app.post("/api/jobs/{name}/run")
+async def run_job_now(name: str) -> dict:
+    """Fire a job in the background — returns the new run row immediately."""
+    try:
+        return await jobs.run_job(name, trigger="manual")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("run_job failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/dashboard")
+async def get_dashboard() -> dict:
+    """Aggregated today view for the / route."""
+    return await dashboard.get_today()

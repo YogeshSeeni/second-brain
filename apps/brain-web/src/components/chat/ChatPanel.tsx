@@ -5,7 +5,7 @@ import { postChat, streamUrl } from "@/lib/api";
 
 type Msg = { role: "user" | "assistant"; body: string };
 
-export default function ChatClient() {
+export default function ChatPanel() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -46,10 +46,17 @@ export default function ChatClient() {
         setStreaming(false);
       });
     } catch (err) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", body: `[error] ${(err as Error).message}` },
-      ]);
+      setMessages((m) => {
+        const copy = m.slice();
+        const last = copy[copy.length - 1];
+        const errBody = `[error] ${(err as Error).message}`;
+        if (last?.role === "assistant" && last.body === "") {
+          copy[copy.length - 1] = { role: "assistant", body: errBody };
+        } else {
+          copy.push({ role: "assistant", body: errBody });
+        }
+        return copy;
+      });
       setStreaming(false);
     }
   }
@@ -62,8 +69,11 @@ export default function ChatClient() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="border-b border-zinc-900 px-4 py-2 text-[11px] uppercase tracking-widest text-zinc-500">
+        main thread
+      </div>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
           <p className="text-xs text-zinc-600">type a message to begin</p>
         )}
@@ -81,7 +91,7 @@ export default function ChatClient() {
           </div>
         ))}
       </div>
-      <div className="border-t border-zinc-800 p-3">
+      <div className="border-t border-zinc-900 p-3">
         <textarea
           className="w-full resize-none rounded border border-zinc-800 bg-zinc-950 p-2 text-sm text-zinc-100 outline-none focus:border-zinc-600"
           placeholder={streaming ? "…" : "message (enter to send, shift+enter for newline)"}

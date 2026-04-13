@@ -47,9 +47,31 @@ data "aws_subnets" "default" {
 }
 
 resource "aws_security_group" "brain" {
-  name        = "brain-runner"
-  description = "Egress-only; ingress is via AWS SSM Session Manager, no open ports."
+  name_prefix = "brain-runner-"
+  description = "Egress-all; ingress :80/:443 for Caddy + Lets Encrypt; SSM handles ops."
   vpc_id      = data.aws_vpc.default.id
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  ingress {
+    description      = "HTTP: Lets Encrypt HTTP-01 challenge and redirect to 443"
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  ingress {
+    description      = "HTTPS: Caddy serves the web UI"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
 
   egress {
     description      = "all egress: github, claude api, secrets manager, ntfy, ssm"
@@ -59,6 +81,20 @@ resource "aws_security_group" "brain" {
     cidr_blocks      = ["0.0.0.0/0"]
     ipv6_cidr_blocks = ["::/0"]
   }
+}
+
+# Elastic IP — keeps the public address stable across instance stop/start so
+# the DuckDNS record doesn't need to chase the assignment.
+resource "aws_eip" "brain" {
+  domain = "vpc"
+  tags = {
+    Name = "brain-runner"
+  }
+}
+
+resource "aws_eip_association" "brain" {
+  instance_id   = aws_instance.brain.id
+  allocation_id = aws_eip.brain.id
 }
 
 # IAM role + instance profile — SSM + Secrets Manager read on brain/*

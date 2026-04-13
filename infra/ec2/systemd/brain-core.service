@@ -11,6 +11,9 @@ WorkingDirectory=/var/brain/apps/brain-core
 Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=BRAIN_VAULT_PATH=/var/brain
 Environment=BRAIN_DB_PATH=/var/brain/apps/brain-core/db/brain.sqlite
+Environment=BRAIN_CORE_HOST=127.0.0.1
+Environment=BRAIN_CORE_PORT=8000
+EnvironmentFile=-/etc/brain/brain-core.env
 ExecStart=/home/ubuntu/.local/bin/uv run python -m brain_core
 Restart=on-failure
 RestartSec=5
