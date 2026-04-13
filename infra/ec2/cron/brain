@@ -1,0 +1,43 @@
+# /etc/cron.d/brain — bare-metal EC2 host job schedule.
+#
+# Parallel to .scripts/cron/crontab.template (which targets the docker runner
+# path we don't currently use). This file is the live source on EC2.
+#
+# Install:
+#   sudo install -m 0644 /var/brain/infra/ec2/cron/brain /etc/cron.d/brain
+#   sudo systemctl reload cron
+#
+# Columns: m h dom mon dow user command
+# All times America/Los_Angeles.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/bin
+MAILTO=""
+TZ=America/Los_Angeles
+
+# Daily health pull — mechanical, Haiku
+0 6 * * * ubuntu /var/brain/.scripts/run-job.sh --job whoop-pull >> /var/log/brain/whoop-pull.log 2>&1
+
+# Daily arxiv digest (SAIL / HPC topics) — Sonnet
+0 6 * * * ubuntu /var/brain/.scripts/run-job.sh --job arxiv-digest >> /var/log/brain/arxiv-digest.log 2>&1
+
+# Weekday canvas sync — Haiku
+0 7 * * 1-5 ubuntu /var/brain/.scripts/run-job.sh --job canvas-sync >> /var/log/brain/canvas-sync.log 2>&1
+
+# Morning brief — Sonnet, the flagship
+30 7 * * * ubuntu /var/brain/.scripts/run-job.sh --job morning >> /var/log/brain/morning.log 2>&1
+
+# Daily LC routing — Sonnet
+0 8 * * * ubuntu /var/brain/.scripts/run-job.sh --job lc-daily >> /var/log/brain/lc-daily.log 2>&1
+
+# Evening closeout — Haiku
+0 22 * * * ubuntu /var/brain/.scripts/run-job.sh --job evening >> /var/log/brain/evening.log 2>&1
+
+# Sunday: weekly review @ 9, lint @ 9:30, recruiting prep refresh @ 10
+0 9 * * 0 ubuntu /var/brain/.scripts/run-job.sh --job weekly-review >> /var/log/brain/weekly-review.log 2>&1
+30 9 * * 0 ubuntu /var/brain/.scripts/run-job.sh --job lint >> /var/log/brain/lint.log 2>&1
+0 10 * * 0 ubuntu /var/brain/.scripts/run-job.sh --job recruiting-prep >> /var/log/brain/recruiting-prep.log 2>&1
+
+# NOTE: claude-creds-sync runs via systemd timer on the bare-metal host
+# (infra/ec2/systemd/claude-creds-sync.timer), NOT via cron — so no */5 entry
+# here. The docker runner template does use cron for this.
