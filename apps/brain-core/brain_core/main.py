@@ -147,11 +147,15 @@ async def get_messages(thread_id: str) -> list[dict]:
 
 @app.post("/api/threads/{thread_id}/messages")
 async def post_message(thread_id: str, req: MessageRequest) -> dict:
-    """Insert a message row — used by run-job.sh --post-to-main-thread."""
-    if await db.get_thread(thread_id) is None:
+    """Insert a message row — used by run-job.sh --post-to-main-thread. Pass
+    thread_id='main' to target the singleton main thread without having to
+    resolve its uuid first."""
+    if thread_id == "main":
+        thread_id = await db.ensure_main_thread()
+    elif await db.get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail="thread not found")
     message_id = await db.insert_message(thread_id, req.role, req.body, req.task_id)
-    return {"message_id": message_id}
+    return {"message_id": message_id, "thread_id": thread_id}
 
 
 @app.post("/api/tick")
