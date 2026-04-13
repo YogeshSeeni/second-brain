@@ -28,12 +28,6 @@ variable "vault_repo_url" {
   default     = "https://github.com/YogeshSeeni/second-brain.git"
 }
 
-variable "tailscale_authkey_secret_name" {
-  description = "Secrets Manager entry holding the Tailscale pre-auth key (plain string, not JSON)"
-  type        = string
-  default     = "brain/tailscale_authkey"
-}
-
 variable "timezone" {
   description = "Host timezone, used for cron schedules"
   type        = string

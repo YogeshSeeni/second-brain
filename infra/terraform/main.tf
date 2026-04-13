@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.5.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -33,9 +33,8 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# Default VPC + a subnet in the first AZ — keeps tonight's rollout simple;
-# revisit with a dedicated VPC later if Tailscale-only access is ever
-# compromised.
+# Default VPC + a subnet in the first AZ — simple by design. Access is via
+# AWS SSM Session Manager only (IAM-authenticated, no open ports).
 data "aws_vpc" "default" {
   default = true
 }
@@ -49,11 +48,11 @@ data "aws_subnets" "default" {
 
 resource "aws_security_group" "brain" {
   name        = "brain-runner"
-  description = "Egress-only; ingress is via Tailscale + SSM, no open ports."
+  description = "Egress-only; ingress is via AWS SSM Session Manager, no open ports."
   vpc_id      = data.aws_vpc.default.id
 
   egress {
-    description      = "all egress — tailscale, github, claude api, secrets manager, ntfy"
+    description      = "all egress: github, claude api, secrets manager, ntfy, ssm"
     from_port        = 0
     to_port          = 0
     protocol         = "-1"
@@ -105,9 +104,10 @@ resource "aws_iam_instance_profile" "brain" {
   role = aws_iam_role.brain.name
 }
 
-# User data: install docker, aws cli, tailscale, join tailnet, clone vault.
-# Claude Code install + OAuth happens later via SSM session (not here — OAuth
-# requires a browser round-trip).
+# User data: install docker, aws cli, prep vault dir. Access is via AWS SSM
+# Session Manager — no Tailscale, no SSH. Claude Code install + OAuth happens
+# later inside the docker container via SSM session (not here — OAuth needs a
+# browser round-trip).
 locals {
   user_data = <<-EOT
     #!/bin/bash
@@ -141,28 +141,14 @@ locals {
     /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip
 
-    # Tailscale
-    curl -fsSL https://tailscale.com/install.sh | sh
-
-    # Join tailnet using pre-auth key from Secrets Manager (retry a few times;
-    # IAM role propagation can lag).
-    for i in 1 2 3 4 5; do
-        if TS_KEY="$(aws secretsmanager get-secret-value --region ${var.region} --secret-id '${var.tailscale_authkey_secret_name}' --query SecretString --output text 2>/dev/null)"; then
-            tailscale up --authkey="$TS_KEY" --ssh --hostname=brain-runner --accept-routes --advertise-tags=tag:brain
-            break
-        fi
-        sleep 5
-    done
-
-    # SSM agent is pre-installed on the Canonical Ubuntu AMI — just make sure
-    # it's running
+    # SSM agent — pre-installed on the Canonical Ubuntu AMI, just make sure
+    # it's enabled (required for `aws ssm start-session` access)
     snap install amazon-ssm-agent --classic || true
     systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent || true
 
-    # Vault bootstrap — clone into /var/brain. The repo is private; we need
-    # auth. For tonight, we defer the clone to the interactive SSM session
-    # step where the user pastes a GitHub PAT (stored later in Secrets
-    # Manager under brain/github_pat for subsequent reboots).
+    # Vault bootstrap — clone into /var/brain. The repo is private; entrypoint
+    # inside the docker container pulls brain/github_pat from Secrets Manager
+    # and clones there. We just create the mount point.
     install -d -o ubuntu -g ubuntu /var/brain
     echo "user data done at $(date)" > /var/log/brain-userdata.log
   EOT

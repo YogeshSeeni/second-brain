@@ -12,8 +12,3 @@ output "ssm_command" {
   description = "Ready-to-run SSM session command"
   value       = "aws ssm start-session --target ${aws_instance.brain.id} --profile ${var.profile} --region ${var.region}"
 }
-
-output "tailscale_hostname" {
-  description = "The hostname the instance registers on the tailnet — ssh/ping via this"
-  value       = "brain-runner"
-}
