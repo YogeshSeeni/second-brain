@@ -107,7 +107,7 @@ async def stream_chat(task_id: int) -> StreamingResponse:
                 return
 
             async for chunk in agent.subscribe(task_id):
-                yield _sse("delta", chunk)
+                yield _sse(chunk.kind, chunk.data)
             yield _sse("done", "")
         except Exception as exc:
             logger.exception("stream failed for task %s: %s", task_id, exc)
