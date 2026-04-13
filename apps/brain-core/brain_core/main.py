@@ -7,12 +7,12 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, capture, dashboard, db, jobs, thesis, tick, watcher
+from . import agent, capture, dashboard, db, inbox, jobs, thesis, tick, watcher
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -164,11 +164,15 @@ async def create_thread(req: CreateThreadRequest) -> dict:
 
 
 @app.get("/api/threads/{thread_id}/messages")
-async def get_messages(thread_id: str) -> list[dict]:
-    """Return all messages on a thread in chronological order."""
-    if await db.get_thread(thread_id) is None:
+async def get_messages(thread_id: str, since: int | None = None) -> list[dict]:
+    """Return messages on a thread in chronological order. Pass thread_id='main'
+    to target the singleton main thread without resolving its uuid first.
+    Optional `since` filter: unix seconds, inclusive lower bound."""
+    if thread_id == "main":
+        thread_id = await db.ensure_main_thread()
+    elif await db.get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail="thread not found")
-    return await db.list_messages(thread_id)
+    return await db.list_messages(thread_id, since=since)
 
 
 @app.post("/api/threads/{thread_id}/messages")
@@ -200,6 +204,33 @@ async def post_capture(req: CaptureRequest) -> dict:
     except Exception as exc:
         logger.exception("capture failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"capture failed: {exc}") from exc
+
+
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB — anything larger should go to S3
+
+
+@app.post("/api/capture/file")
+async def post_capture_file(file: UploadFile = File(...)) -> dict:
+    """Upload a file (pdf, image, csv, text). Saved under raw/<bucket>/ with
+    a mirror wiki/sources/*-summary.md stub. No Whisper path yet — audio is
+    stored but not transcribed."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+        )
+    try:
+        return await capture.capture_file(file.filename or "capture", data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("file capture failed: %s", exc)
+        raise HTTPException(
+            status_code=500, detail=f"file capture failed: {exc}"
+        ) from exc
 
 
 @app.get("/api/jobs")
@@ -245,3 +276,24 @@ async def ack_nudge(nudge_id: int) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail="nudge not found or already acked")
     return {"ok": True, "id": nudge_id}
+
+
+class InboxDispatchRequest(BaseModel):
+    path: str
+
+
+@app.get("/api/inbox")
+async def get_inbox() -> list[dict]:
+    """List draft outbound messages under wiki/ops/inbox/."""
+    return inbox.list_drafts()
+
+
+@app.post("/api/inbox/dispatch")
+async def post_inbox_dispatch(req: InboxDispatchRequest) -> dict:
+    """Flip a draft's frontmatter to dispatched=true (Yogesh sent it by hand)."""
+    try:
+        return inbox.mark_dispatched(req.path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

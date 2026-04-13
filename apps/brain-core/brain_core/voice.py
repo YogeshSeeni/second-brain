@@ -75,6 +75,32 @@ def load_claude_md() -> str:
         return ""
 
 
+def load_pinned() -> str:
+    """Read wiki/ops/pinned.md — the durable context file Yogesh (or claude
+    on his behalf) pins across conversations. Stripped frontmatter so the
+    block that reaches the system prompt is pure content."""
+    path = _vault_root() / "wiki" / "ops" / "pinned.md"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        logger.exception("failed reading pinned.md: %s", exc)
+        return ""
+    return _strip_frontmatter(raw).strip()
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop a leading YAML frontmatter block (between --- markers) if present."""
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---", 4)
+    if end == -1:
+        return text
+    tail = text[end + 4 :]
+    return tail.lstrip("\n")
+
+
 def _tokenize(text: str) -> set[str]:
     """Lowercase, keep alphanumeric words ≥4 chars, drop stopwords."""
     return {
@@ -148,6 +174,7 @@ def build_system_prompt(
     voice = load_voice()
     thesis = load_thesis()
     claude_md = load_claude_md()
+    pinned = load_pinned()
     base = (
         "# Who you are (voice.md)\n\n"
         + voice
@@ -156,6 +183,14 @@ def build_system_prompt(
         + "\n\n# CLAUDE.md\n\n"
         + claude_md
     )
+    if pinned:
+        base += (
+            "\n\n# Pinned context (wiki/ops/pinned.md)\n\n"
+            "Durable notes Yogesh has pinned across conversations. Treat as "
+            "authoritative standing orders — outrank prior assistant replies "
+            "when they conflict.\n\n"
+            + pinned
+        )
     if thread_kind != "topic" or not thread_title:
         return base
     topic_context = resolve_topic_context(thread_title, recent_user_messages or [])

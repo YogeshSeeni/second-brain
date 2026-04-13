@@ -45,6 +45,32 @@ export function postCapture(body: string): Promise<CaptureResponse> {
   });
 }
 
+export type CaptureFileResponse = {
+  raw_path: string;
+  summary_path: string;
+  kind: string;
+  summary: string;
+  classified: boolean;
+};
+
+export async function postCaptureFile(
+  file: File,
+): Promise<CaptureFileResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BRAIN_CORE_URL}/api/capture/file`, {
+    method: "POST",
+    body: form,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(
+      `POST /api/capture/file failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  return (await res.json()) as CaptureFileResponse;
+}
+
 export type JobRun = {
   id: number;
   name: string;
@@ -162,4 +188,35 @@ export type Message = {
 
 export function listMessages(threadId: string): Promise<Message[]> {
   return json(`/api/threads/${encodeURIComponent(threadId)}/messages`);
+}
+
+export type InboxDraft = {
+  path: string;
+  name: string;
+  title: string;
+  kind: string;
+  to: string | null;
+  subject: string | null;
+  status: string;
+  dispatched: boolean;
+  dispatched_at: string | null;
+  drafted_at: string | null;
+  expires: string | null;
+  mtime: number;
+  body: string;
+};
+
+export function listInbox(): Promise<InboxDraft[]> {
+  return json("/api/inbox");
+}
+
+export function dispatchDraft(path: string): Promise<{
+  path: string;
+  dispatched: boolean;
+  dispatched_at: string;
+}> {
+  return json("/api/inbox/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
 }

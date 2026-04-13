@@ -194,14 +194,26 @@ async def insert_message(
     return message_id
 
 
-async def list_messages(thread_id: str) -> list[dict[str, Any]]:
-    """Return all messages for a thread in chronological order."""
+async def list_messages(
+    thread_id: str, since: int | None = None
+) -> list[dict[str, Any]]:
+    """Return messages for a thread in chronological order. If `since` is set,
+    only include rows with created_at >= since (unix seconds)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, id ASC",
-            (thread_id,),
-        ) as cur:
+        if since is None:
+            sql = (
+                "SELECT * FROM messages WHERE thread_id = ? "
+                "ORDER BY created_at ASC, id ASC"
+            )
+            params: tuple[Any, ...] = (thread_id,)
+        else:
+            sql = (
+                "SELECT * FROM messages WHERE thread_id = ? AND created_at >= ? "
+                "ORDER BY created_at ASC, id ASC"
+            )
+            params = (thread_id, since)
+        async with db.execute(sql, params) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 

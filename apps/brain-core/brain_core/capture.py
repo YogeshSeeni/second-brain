@@ -164,3 +164,124 @@ async def capture(body: str) -> dict:
     dest = _write_capture(kind, target, body, summary)
     rel = str(dest.relative_to(_vault_root()))
     return {"kind": kind, "target_path": rel, "summary": summary}
+
+
+# File-drop path — large or binary captures land in raw/ and a thin
+# wiki/sources/ summary wikilinks back to the raw asset. Classifier only sees
+# text files; everything else skips classification and goes straight to a
+# stub summary page.
+
+_TEXT_EXTS = {
+    ".md", ".txt", ".rst", ".org", ".csv", ".tsv", ".json", ".yaml", ".yml",
+    ".log", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".c", ".cpp",
+    ".h", ".hpp", ".cu", ".cuh", ".sql", ".toml", ".ini", ".env.example",
+}
+
+
+def _ext_bucket(ext: str) -> str:
+    ext = ext.lower()
+    if ext in {".pdf"}:
+        return "papers"
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic"}:
+        return "assets"
+    if ext in {".csv", ".tsv", ".json", ".jsonl", ".parquet"}:
+        return "exports"
+    if ext in {".mp3", ".wav", ".m4a", ".flac", ".ogg"}:
+        return "assets"
+    if ext in {".md", ".txt", ".rst", ".org"}:
+        return "docs"
+    return "docs"
+
+
+async def capture_file(filename: str, data: bytes) -> dict:
+    """Save an uploaded file to raw/<bucket>/YYYY-MM-DD-<slug><ext> and create
+    a wiki/sources/<slug>-summary.md stub. If the file is text-ish and small,
+    also run the classifier on the content so it can wikilink into the right
+    concept/entity pages.
+
+    Returns {raw_path, summary_path, kind, summary, classified}.
+    """
+    if not filename:
+        raise ValueError("missing filename")
+    if not data:
+        raise ValueError("empty file")
+
+    root = _vault_root()
+    stamp = date.today().isoformat()
+    stem = Path(filename).stem or "capture"
+    ext = Path(filename).suffix or ""
+    bucket = _ext_bucket(ext)
+    slug = _slugify(stem, f"capture-{stamp}")
+
+    raw_dir = root / "raw" / bucket
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_name = f"{stamp}-{slug}{ext}"
+    raw_dest = raw_dir / raw_name
+    i = 2
+    while raw_dest.exists():
+        raw_dest = raw_dir / f"{stamp}-{slug}-{i}{ext}"
+        i += 1
+    raw_dest.write_bytes(data)
+
+    rel_raw = str(raw_dest.relative_to(root))
+
+    # If text-ish and under a token budget, read + classify so the summary
+    # page inherits the real kind/summary/cross-refs.
+    classified = False
+    classifier_summary = ""
+    text_body: str | None = None
+    is_text = ext.lower() in _TEXT_EXTS
+    if is_text and len(data) < 256 * 1024:
+        try:
+            text_body = data.decode("utf-8", errors="replace")
+        except Exception:
+            text_body = None
+    if text_body:
+        cls = await _classify(text_body)
+        if cls and "kind" in cls:
+            classifier_summary = str(cls.get("summary", ""))
+            classified = True
+
+    summary_slug = _slugify(stem, f"capture-{stamp}")
+    summary_path = root / "wiki" / "sources" / f"{stamp}-{summary_slug}-summary.md"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    i = 2
+    while summary_path.exists():
+        summary_path = (
+            root / "wiki" / "sources" / f"{stamp}-{summary_slug}-{i}-summary.md"
+        )
+        i += 1
+
+    title = classifier_summary or stem
+    body_block = (
+        f"Raw source: [[{rel_raw}]]\n\n"
+        f"**Filename:** `{filename}`  \n"
+        f"**Size:** {len(data)} bytes  \n"
+        f"**Bucket:** `raw/{bucket}/`\n"
+    )
+    if classifier_summary:
+        body_block += f"\n## Classifier summary\n\n{classifier_summary}\n"
+    if text_body and len(text_body) < 8000:
+        body_block += f"\n## Excerpt\n\n```\n{text_body[:4000]}\n```\n"
+
+    frontmatter = (
+        "---\n"
+        f'title: "{title}"\n'
+        f"created: {stamp}\n"
+        f"updated: {stamp}\n"
+        "tags: [capture, file-drop]\n"
+        'type: "doc"\n'
+        "status: active\n"
+        f'raw-path: "{rel_raw}"\n'
+        "---\n\n"
+    )
+    summary_path.write_text(frontmatter + body_block, encoding="utf-8")
+
+    return {
+        "raw_path": rel_raw,
+        "summary_path": str(summary_path.relative_to(root)),
+        "kind": "file",
+        "summary": classifier_summary,
+        "classified": classified,
+    }
