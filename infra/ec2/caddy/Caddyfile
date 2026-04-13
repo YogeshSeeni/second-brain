@@ -12,7 +12,12 @@
 {$BRAIN_HOST} {
     encode zstd gzip
 
-    # Reverse-proxy /api/* to brain-core so the browser speaks same-origin.
+    # NextAuth lives on brain-web at /api/auth/* — must route there first.
+    handle /api/auth/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    # Everything else under /api/* belongs to brain-core (FastAPI).
     handle /api/* {
         reverse_proxy 127.0.0.1:8000 {
             flush_interval -1  # stream SSE events as they arrive
