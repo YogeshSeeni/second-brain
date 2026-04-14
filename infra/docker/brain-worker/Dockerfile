@@ -9,9 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the Anthropic Claude CLI. Version pinned; update deliberately.
-ENV CLAUDE_VERSION=1.0.0
-RUN curl -fsSL "https://claude.ai/install.sh" | bash -s -- --yes \
+# Install the Anthropic Claude CLI. The installer takes `stable|latest|VERSION`
+# as its sole positional arg; pin to a channel so worker images are reproducible
+# within a base image rebuild.
+ARG CLAUDE_CHANNEL=stable
+RUN curl -fsSL "https://claude.ai/install.sh" | bash -s -- "${CLAUDE_CHANNEL}" \
     && /root/.local/bin/claude --version \
     && cp /root/.local/bin/claude /usr/local/bin/claude
 
