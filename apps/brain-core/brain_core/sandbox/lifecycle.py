@@ -45,6 +45,7 @@ async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
         image=WORKER_IMAGE,
         worktree_path=handle.worktree_path,
         scratch_path=handle.scratch_path,
+        bare_repo=BARE_REPO,
         prompt=prompt,
         prompt_family=prompt_family,
         model=model,

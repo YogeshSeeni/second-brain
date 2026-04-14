@@ -26,10 +26,19 @@ def build_docker_run_args(
     image: str,
     worktree_path: Path,
     scratch_path: Path,
+    bare_repo: Path,
     prompt: str,
     prompt_family: str,
     model: str,
 ) -> list[str]:
+    # The worktree's .git file is a pointer of the form
+    #   gitdir: <bare_repo>/worktrees/<wt-name>
+    # using the *resolved* absolute host path that git wrote when the worktree
+    # was added. For `git` inside the container to follow it, the bare repo
+    # must be bind-mounted at the same resolved absolute path. On macOS,
+    # /tmp -> /private/tmp, so a caller passing `/tmp/foo` will see git store
+    # `/private/tmp/foo` in the .git pointer — we resolve here to match.
+    bare_resolved = bare_repo.resolve()
     return [
         "docker", "run", "--rm", "-i",
         "--name", f"brain-run-{run_id}",
@@ -42,6 +51,7 @@ def build_docker_run_args(
         "--cap-drop=ALL",
         "--mount", f"type=bind,src={worktree_path},dst=/workspace",
         "--mount", f"type=bind,src={scratch_path},dst=/scratch",
+        "--mount", f"type=bind,src={bare_resolved},dst={bare_resolved}",
         "-e", f"BRAIN_RUN_ID={run_id}",
         "-e", f"BRAIN_PROMPT={prompt}",
         "-e", f"BRAIN_PROMPT_FAMILY={prompt_family}",
@@ -56,6 +66,7 @@ async def start_run(
     image: str,
     worktree_path: Path,
     scratch_path: Path,
+    bare_repo: Path,
     prompt: str,
     prompt_family: str,
     model: str,
@@ -71,6 +82,7 @@ async def start_run(
         image=image,
         worktree_path=worktree_path,
         scratch_path=scratch_path,
+        bare_repo=bare_repo,
         prompt=prompt,
         prompt_family=prompt_family,
         model=model,

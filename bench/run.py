@@ -9,6 +9,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 
+from brain_core import db
+from brain_core.scheduler.run_one import run_one
+from brain_core.scheduler.runner import start_scheduler
+
 from bench.loadgen.profiles import Profile, ProfileConfig, parse_duration
 from bench.loadgen.generator import run_sustained
 from bench.report.render import render_report
@@ -35,7 +39,12 @@ def main() -> None:
 
 
 async def _run(cfg: ProfileConfig, out_path: str | None) -> None:
-    results = await run_sustained(cfg.concurrency, cfg.duration_sec)
+    await db.init_db()
+    handle = start_scheduler(run_one)
+    try:
+        results = await run_sustained(cfg.concurrency, cfg.duration_sec)
+    finally:
+        await handle.stop()
     await render_report(cfg, results, out_path)
 
 
