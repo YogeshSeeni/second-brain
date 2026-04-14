@@ -28,6 +28,7 @@ def build_docker_run_args(
     worktree_path: Path,
     scratch_path: Path,
     bare_repo: Path,
+    claude_credentials: Path,
     prompt: str,
     prompt_family: str,
     model: str,
@@ -48,6 +49,12 @@ def build_docker_run_args(
     # so writes to /workspace and the bare repo succeed without elevated caps.
     eff_uid = uid if uid is not None else os.getuid()
     eff_gid = gid if gid is not None else os.getgid()
+    # Mount the host's Claude OAuth credentials so the in-container `claude -p`
+    # rides on Yogesh's subscription instead of needing an ANTHROPIC_API_KEY.
+    # Read-only because token refresh is handled host-side by the systemd
+    # claude-creds-sync.timer pulling from Secrets Manager every 5 minutes —
+    # letting the container write back would race the host sync.
+    creds_resolved = claude_credentials.resolve()
     return [
         "docker", "run", "--rm", "-i",
         "--name", f"brain-run-{run_id}",
@@ -62,6 +69,8 @@ def build_docker_run_args(
         "--mount", f"type=bind,src={worktree_path},dst=/workspace",
         "--mount", f"type=bind,src={scratch_path},dst=/scratch",
         "--mount", f"type=bind,src={bare_resolved},dst={bare_resolved}",
+        "--mount", f"type=bind,src={creds_resolved},dst=/claude-home/.claude/.credentials.json,readonly",
+        "-e", "HOME=/claude-home",
         "-e", f"BRAIN_RUN_ID={run_id}",
         "-e", f"BRAIN_PROMPT={prompt}",
         "-e", f"BRAIN_PROMPT_FAMILY={prompt_family}",
@@ -77,6 +86,7 @@ async def start_run(
     worktree_path: Path,
     scratch_path: Path,
     bare_repo: Path,
+    claude_credentials: Path,
     prompt: str,
     prompt_family: str,
     model: str,
@@ -93,6 +103,7 @@ async def start_run(
         worktree_path=worktree_path,
         scratch_path=scratch_path,
         bare_repo=bare_repo,
+        claude_credentials=claude_credentials,
         prompt=prompt,
         prompt_family=prompt_family,
         model=model,

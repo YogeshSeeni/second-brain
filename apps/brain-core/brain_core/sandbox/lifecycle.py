@@ -28,6 +28,12 @@ BARE_REPO     = Path(os.environ.get("BRAIN_VAULT_GIT",  "/var/brain/vault.git"))
 WORKTREE_ROOT = Path(os.environ.get("BRAIN_WORKTREE_ROOT", "/var/brain/worktrees"))
 SCRATCH_ROOT  = Path(os.environ.get("BRAIN_SCRATCH_ROOT",  "/var/brain/scratch"))
 WORKER_IMAGE  = os.environ.get("BRAIN_WORKER_IMAGE", "brain-worker:v1")
+# Host path to Claude OAuth credentials, bind-mounted into every worker
+# container so `claude -p` rides on Yogesh's subscription instead of an API
+# key. Kept fresh by the systemd claude-creds-sync.timer (ADR 0007).
+CLAUDE_CREDENTIALS = Path(os.environ.get(
+    "BRAIN_CLAUDE_CREDS", "/home/ubuntu/.claude/.credentials.json",
+))
 
 
 async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
@@ -54,6 +60,7 @@ async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
             worktree_path=handle.worktree_path,
             scratch_path=handle.scratch_path,
             bare_repo=BARE_REPO,
+            claude_credentials=CLAUDE_CREDENTIALS,
             prompt=prompt,
             prompt_family=prompt_family,
             model=model,
