@@ -14,22 +14,16 @@ from pydantic import BaseModel
 
 from . import agent, capture, dashboard, db, inbox, jobs, thesis, tick, watcher
 from brain_core.scheduler.runner import start_scheduler
+from brain_core.scheduler.run_one import run_one
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
-async def _placeholder_run_one(run):
-    from brain_core.scheduler.queue import transition_state
-    from brain_core.scheduler.types import RunState
-    logger.info("placeholder run_one: marking run_id=%s DONE", run.id)
-    await transition_state(run.id, RunState.DONE)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await db.init_db()
-    handle = start_scheduler(_placeholder_run_one)
+    handle = start_scheduler(run_one)
     watcher_handle = await watcher.start_watcher(watcher.VAULT_PATH)
     try:
         yield
