@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull latest second-brain-vault from GitHub into /var/brain/vault-data
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/brain/vault-data
+Environment=GIT_SSH_COMMAND=ssh -i /home/ubuntu/.ssh/second-brain-vault -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
+ExecStart=/usr/bin/git -C /var/brain/vault-data pull --ff-only --quiet

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic second-brain-vault pull
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=vault-sync.service
+
+[Install]
+WantedBy=timers.target
