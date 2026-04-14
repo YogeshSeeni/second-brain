@@ -6,10 +6,14 @@
 .DS_Store
 *.swp
 
-# Personal data — never commit (vault content lives only on local disk + EBS)
-raw/
-wiki/
+# Personal data lives in the sibling second-brain-vault repo; wiki/ and raw/
+# are symlinks into it. Trailing-slash-free patterns match symlinks too.
+wiki
+raw
 output/
+
+# Transient backups from the vault migration
+*.pre-vault-bak/
 
 # Secrets — never commit
 .claude/settings.json
