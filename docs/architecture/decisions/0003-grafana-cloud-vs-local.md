@@ -1,6 +1,6 @@
 # 0003 — Grafana Cloud free tier vs local Prometheus/Tempo/Grafana
 
-**Status:** Accepted
+**Status:** Superseded-by-0006
 **Date:** 2026-04-14
 **Deciders:** Yogesh Seenichamy
 
