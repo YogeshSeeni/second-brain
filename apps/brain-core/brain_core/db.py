@@ -13,7 +13,8 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.environ.get("BRAIN_DB_PATH", "./db/brain.sqlite")
+def _db_path() -> str:
+    return os.environ.get("BRAIN_DB_PATH", "./db/brain.sqlite")
 
 
 SCHEMA = """
@@ -115,26 +116,53 @@ CREATE TABLE IF NOT EXISTS whoop_sleep (
 );
 """
 
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+
+async def run_migrations() -> None:
+    """Apply SQL files in `migrations/NNNN_*.sql` whose number > max(applied)."""
+    async with aiosqlite.connect(_db_path()) as conn:
+        await conn.executescript(
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);"
+        )
+        cur = await conn.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+        (current,) = await cur.fetchone()
+        files = sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+        for path in files:
+            version = int(path.name[:4])
+            if version <= current:
+                continue
+            sql = path.read_text()
+            await conn.executescript(sql)
+            await conn.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (version, int(time.time())),
+            )
+            await conn.commit()
+            logger.info("applied migration %s", path.name)
+
 
 def _now() -> int:
     return int(time.time())
 
 
-async def init() -> None:
+async def init_db() -> None:
     """Create SQLite file (and parent dir) and apply schema if missing."""
-    path = Path(DB_PATH)
+    path = Path(_db_path())
     path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         await db.executescript(SCHEMA)
         await db.commit()
-    logger.info("db init complete at %s", DB_PATH)
+    await run_migrations()
+    logger.info("db init complete at %s", _db_path())
 
 
 async def create_thread(kind: str, title: str | None) -> str:
     """Insert a new thread row and return its id."""
     thread_id = uuid.uuid4().hex
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
             "INSERT INTO threads (id, kind, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             (thread_id, kind, title, now, now),
@@ -145,7 +173,7 @@ async def create_thread(kind: str, title: str | None) -> str:
 
 async def get_thread(thread_id: str) -> dict[str, Any] | None:
     """Return a thread row as a dict, or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)) as cur:
             row = await cur.fetchone()
@@ -154,7 +182,7 @@ async def get_thread(thread_id: str) -> dict[str, Any] | None:
 
 async def ensure_main_thread() -> str:
     """Return the id of the singleton main thread, creating it if missing."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id FROM threads WHERE kind = 'main' ORDER BY created_at ASC LIMIT 1"
@@ -167,7 +195,7 @@ async def ensure_main_thread() -> str:
 
 async def list_threads() -> list[dict[str, Any]]:
     """Return all threads newest-first."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM threads ORDER BY updated_at DESC"
@@ -180,7 +208,7 @@ async def insert_message(
 ) -> int:
     """Insert a message row and bump the thread's updated_at."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         cur = await db.execute(
             "INSERT INTO messages (thread_id, role, body, created_at, task_id) VALUES (?, ?, ?, ?, ?)",
             (thread_id, role, body, now, task_id),
@@ -199,7 +227,7 @@ async def list_messages(
 ) -> list[dict[str, Any]]:
     """Return messages for a thread in chronological order. If `since` is set,
     only include rows with created_at >= since (unix seconds)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         if since is None:
             sql = (
@@ -220,7 +248,7 @@ async def list_messages(
 async def create_agent_task(thread_id: str, trigger: str, prompt_hash: str) -> int:
     """Insert an agent_task in 'queued' state and return its id."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         cur = await db.execute(
             "INSERT INTO agent_tasks (thread_id, trigger, state, started_at, prompt_hash) VALUES (?, ?, 'queued', ?, ?)",
             (thread_id, trigger, now, prompt_hash),
@@ -234,7 +262,7 @@ async def create_agent_task(thread_id: str, trigger: str, prompt_hash: str) -> i
 async def set_task_state(task_id: int, state: str, pid: int | None = None) -> None:
     """Update an agent_task's state, optionally its pid, and ended_at for terminal states."""
     terminal = state in ("done", "error", "interrupted")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         if terminal:
             await db.execute(
                 "UPDATE agent_tasks SET state = ?, pid = ?, ended_at = ? WHERE id = ?",
@@ -250,7 +278,7 @@ async def set_task_state(task_id: int, state: str, pid: int | None = None) -> No
 
 async def get_task(task_id: int) -> dict[str, Any] | None:
     """Return an agent_task row as a dict, or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM agent_tasks WHERE id = ?", (task_id,)
@@ -261,7 +289,7 @@ async def get_task(task_id: int) -> dict[str, Any] | None:
 
 async def running_tasks_on_thread(thread_id: str) -> list[int]:
     """Return ids of agent_tasks on a thread currently in flight."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         async with db.execute(
             "SELECT id FROM agent_tasks WHERE thread_id = ? "
             "AND state IN ('queued', 'running') ORDER BY id ASC",
@@ -273,7 +301,7 @@ async def running_tasks_on_thread(thread_id: str) -> list[int]:
 async def create_job_run(name: str, trigger: str, stdout_path: str | None) -> int:
     """Insert a job_runs row in 'running' state and return its id."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         cur = await db.execute(
             "INSERT INTO job_runs (name, trigger, started_at, state, stdout_path) "
             "VALUES (?, ?, ?, 'running', ?)",
@@ -292,7 +320,7 @@ async def finish_job_run(
     files_touched: int | None,
 ) -> None:
     """Mark a job_runs row terminal."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
             "UPDATE job_runs SET state = ?, exit_code = ?, files_touched = ?, ended_at = ? "
             "WHERE id = ?",
@@ -302,7 +330,7 @@ async def finish_job_run(
 
 
 async def get_job_run(run_id: int) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM job_runs WHERE id = ?", (run_id,)
@@ -313,7 +341,7 @@ async def get_job_run(run_id: int) -> dict[str, Any] | None:
 
 async def latest_job_run(name: str) -> dict[str, Any] | None:
     """Return the most recent run for a given job name, or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM job_runs WHERE name = ? ORDER BY started_at DESC LIMIT 1",
@@ -324,7 +352,7 @@ async def latest_job_run(name: str) -> dict[str, Any] | None:
 
 
 async def recent_job_runs(limit: int = 20) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM job_runs ORDER BY started_at DESC LIMIT ?", (limit,)
@@ -333,7 +361,7 @@ async def recent_job_runs(limit: int = 20) -> list[dict[str, Any]]:
 
 
 async def recent_agent_tasks(limit: int = 20) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM agent_tasks ORDER BY started_at DESC LIMIT ?", (limit,)
@@ -342,7 +370,7 @@ async def recent_agent_tasks(limit: int = 20) -> list[dict[str, Any]]:
 
 
 async def latest_whoop_recovery() -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM whoop_recovery ORDER BY start_at DESC LIMIT 1"
@@ -352,7 +380,7 @@ async def latest_whoop_recovery() -> dict[str, Any] | None:
 
 
 async def unacked_nudges(limit: int = 10) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM nudges WHERE acknowledged_at IS NULL "
@@ -368,7 +396,7 @@ async def create_nudge(
     """Insert a nudge row and return its id. Dedupes on (kind, source_ref)
     when source_ref is set so the tick doesn't pile up duplicates."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         if source_ref:
             async with db.execute(
                 "SELECT id FROM nudges WHERE kind = ? AND source_ref = ? "
@@ -391,7 +419,7 @@ async def create_nudge(
 
 async def ack_nudge(nudge_id: int) -> bool:
     """Mark a nudge acknowledged. Returns True if a row was updated."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_path()) as db:
         cur = await db.execute(
             "UPDATE nudges SET acknowledged_at = ? "
             "WHERE id = ? AND acknowledged_at IS NULL",

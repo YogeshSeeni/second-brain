@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    await db.init()
+    await db.init_db()
     watcher_handle = await watcher.start_watcher(watcher.VAULT_PATH)
     try:
         yield
