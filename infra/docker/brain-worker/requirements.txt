@@ -1,0 +1,2 @@
+# brain-worker W1 has no Python deps beyond what the base image + claude CLI bundle.
+# W2 adds httpx for the local policy proxy client.
