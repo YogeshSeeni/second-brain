@@ -19,16 +19,53 @@ write_files:
     content: "v1.0-foundations"
     permissions: '0644'
 
+  - path: /usr/local/bin/install-aws-cli.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # awscli is not in Ubuntu apt; pull v2 binary directly. Idempotent.
+      if command -v aws >/dev/null 2>&1; then exit 0; fi
+      cd /tmp
+      curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o awscliv2.zip
+      unzip -q awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+
   - path: /usr/local/bin/mount-brain-state.sh
     permissions: '0755'
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
-      # Find the attached brain-state volume (tagged Role=persistent-state-v1) by
-      # the filesystem label we stamp on first boot.
+      # Self-attach pattern: on a fresh Spot replacement the brain-state EBS
+      # is in `available` state and not attached. The instance role has
+      # ec2:AttachVolume on this volume — call it ourselves so a Spot churn
+      # round-trips without operator intervention.
+      REGION=$(curl -fs http://169.254.169.254/latest/meta-data/placement/region)
+      IID=$(curl -fs http://169.254.169.254/latest/meta-data/instance-id)
+      VOL=$(aws ec2 describe-volumes --region "$REGION" \
+        --filters "Name=tag:Role,Values=persistent-state-v1" "Name=status,Values=available,in-use" \
+        --query 'Volumes[0].VolumeId' --output text)
+      if [ -z "$VOL" ] || [ "$VOL" = "None" ]; then
+        echo "brain-state volume not found via tag Role=persistent-state-v1" >&2; exit 1
+      fi
+      ATTACHED_TO=$(aws ec2 describe-volumes --region "$REGION" --volume-ids "$VOL" \
+        --query 'Volumes[0].Attachments[0].InstanceId' --output text)
+      if [ "$ATTACHED_TO" != "$IID" ]; then
+        if [ "$ATTACHED_TO" != "None" ] && [ -n "$ATTACHED_TO" ]; then
+          echo "brain-state attached to $ATTACHED_TO, refusing to steal" >&2; exit 1
+        fi
+        aws ec2 attach-volume --region "$REGION" --volume-id "$VOL" --instance-id "$IID" --device /dev/sdf
+        # Wait up to 60s for the device to surface
+        for i in $(seq 1 30); do
+          DEV=$(lsblk -ndo NAME,SIZE,TYPE | awk '$3=="disk" && $2=="200G" {print "/dev/"$1; exit}')
+          [ -n "$DEV" ] && break
+          sleep 2
+        done
+      fi
       DEV=$(lsblk -ndo NAME,SIZE,TYPE | awk '$3=="disk" && $2=="200G" {print "/dev/"$1; exit}')
       if [ -z "$DEV" ]; then
-        echo "brain-state volume not found" >&2; exit 1
+        echo "brain-state volume not present in lsblk after attach" >&2; exit 1
       fi
       if ! blkid "$DEV" >/dev/null 2>&1; then
         mkfs.xfs -L brain-state "$DEV"
@@ -42,5 +79,6 @@ write_files:
 runcmd:
   - [ systemctl, enable, --now, docker ]
   - [ usermod, -aG, docker, ubuntu ]
+  - [ /usr/local/bin/install-aws-cli.sh ]
   - [ /usr/local/bin/mount-brain-state.sh ]
   # grafana-agent + brain-core systemd install happens in Phase D and via Ansible-lite shell in bootstrap; this cloud-init only brings up the host.
