@@ -1,0 +1,86 @@
+import json
+import pytest
+
+from brain_core.scheduler import (
+    AgentClass,
+    Priority,
+    RunSpec,
+    RunState,
+    TriggerSource,
+)
+from brain_core.scheduler.queue import (
+    idempotency_key_for,
+    insert_run,
+    load_run,
+    transition_state,
+    list_runs_by_state,
+)
+
+
+def _spec() -> RunSpec:
+    return RunSpec(
+        prompt="hello",
+        prompt_family="lc-daily",
+        agent_class=AgentClass.BACKGROUND,
+        priority=Priority.LOW,
+        trigger_source=TriggerSource.JOB,
+        estimated_in=1000,
+        estimated_out=500,
+    )
+
+
+def test_idempotency_key_stable_for_same_payload():
+    a = idempotency_key_for(TriggerSource.JOB, {"name": "lc-daily", "date": "2026-04-14"})
+    b = idempotency_key_for(TriggerSource.JOB, {"date": "2026-04-14", "name": "lc-daily"})
+    assert a == b
+
+
+def test_idempotency_key_differs_for_different_payload():
+    a = idempotency_key_for(TriggerSource.JOB, {"name": "lc-daily", "date": "2026-04-14"})
+    b = idempotency_key_for(TriggerSource.JOB, {"name": "lc-daily", "date": "2026-04-15"})
+    assert a != b
+
+
+@pytest.mark.asyncio
+async def test_insert_then_load(temp_db: str):
+    spec = _spec()
+    run_id = await insert_run(spec, idempotency_key="k1")
+    run = await load_run(run_id)
+    assert run is not None
+    assert run.id == run_id
+    assert run.state == RunState.PENDING
+    assert run.priority == Priority.LOW
+    assert run.agent_class == AgentClass.BACKGROUND
+    assert run.prompt_family == "lc-daily"
+    assert run.estimated_in == 1000
+    payload = json.loads(run.payload_json)
+    assert payload["prompt"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_transition_state_updates_timestamps(temp_db: str, fake_clock):
+    spec = _spec()
+    run_id = await insert_run(spec, idempotency_key="k2")
+    fake_clock[0] += 5
+    await transition_state(run_id, RunState.ADMITTED)
+    run = await load_run(run_id)
+    assert run.state == RunState.ADMITTED
+    assert run.admitted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_list_runs_by_state_orders_by_priority_then_created(temp_db: str, fake_clock):
+    spec_low = _spec()
+    spec_high = RunSpec(
+        prompt="urgent",
+        prompt_family="chat",
+        agent_class=AgentClass.CHAT,
+        priority=Priority.CRITICAL,
+        trigger_source=TriggerSource.CHAT,
+    )
+    id_low = await insert_run(spec_low, idempotency_key="k-low")
+    fake_clock[0] += 1
+    id_high = await insert_run(spec_high, idempotency_key="k-high")
+
+    pending = await list_runs_by_state(RunState.PENDING, limit=10)
+    assert [r.id for r in pending] == [id_high, id_low]
