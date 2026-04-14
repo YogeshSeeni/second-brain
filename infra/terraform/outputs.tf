@@ -17,3 +17,8 @@ output "public_ip" {
   description = "Elastic IP for the brain instance. Point DuckDNS A record at this."
   value       = aws_eip.brain.public_ip
 }
+
+output "brain_worker_ecr_url" {
+  description = "ECR repo URL for pushing brain-worker:vN"
+  value       = aws_ecr_repository.brain_worker.repository_url
+}
