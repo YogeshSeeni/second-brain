@@ -10,6 +10,7 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -49,12 +50,20 @@ async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
         model=model,
     )
 
-    lines: list[bytes] = []
-    async for line in stdout_iter:
-        lines.append(line)
+    # Drain stdout and stderr concurrently. If we drain stdout-then-stderr
+    # sequentially, a child that writes >64KB to stderr blocks on its pipe
+    # buffer, never closes stdout, and we hang forever on the stdout iterator.
+    async def _drain_stdout() -> list[bytes]:
+        return [line async for line in stdout_iter]
 
+    async def _drain_stderr() -> bytes:
+        if proc.stderr is None:
+            return b""
+        return await proc.stderr.read()
+
+    lines, stderr_bytes = await asyncio.gather(_drain_stdout(), _drain_stderr())
     exit_code = await proc.wait()
-    stderr = (await proc.stderr.read()).decode() if proc.stderr else ""
+    stderr = stderr_bytes.decode(errors="replace")
 
     parsed = parse_stream_json(lines)
 

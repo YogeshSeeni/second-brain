@@ -10,7 +10,11 @@ from __future__ import annotations
 import json
 import logging
 
+from brain_core.reconciler.merge import fast_forward_or_stage
 from brain_core.sandbox import lifecycle
+from brain_core.sandbox.lifecycle import BARE_REPO
+from brain_core.sandbox.worktree import reap_run
+
 from .queue import load_run, transition_state
 from .types import Run, RunState
 
@@ -26,8 +30,9 @@ async def run_one(run: Run) -> None:
 
     payload = json.loads(fresh.payload_json)
     prompt = payload.get("prompt", "")
-    model  = payload.get("model", "claude-sonnet-4-6")
+    model  = payload.get("model", "claude-sonnet-4-5")
 
+    handle = None
     try:
         handle, outcome = await lifecycle.execute(
             run_id=fresh.id,
@@ -38,20 +43,28 @@ async def run_one(run: Run) -> None:
     except Exception:
         logger.exception("sandbox.execute crashed for run_id=%s", fresh.id)
         await transition_state(fresh.id, RunState.FAILED)
+        # If prepare_run succeeded but a later step raised, the worktree is
+        # orphaned. Reap it but keep the branch — the W2 three-way path or
+        # manual recovery may want to inspect it.
+        if handle is not None:
+            try:
+                await reap_run(handle, bare_repo=BARE_REPO, delete_branch=False)
+            except Exception:
+                logger.exception("reap_run cleanup failed for run_id=%s", fresh.id)
         return
 
     await transition_state(fresh.id, RunState.RECONCILING)
 
-    # Phase K wires reconciler.merge here. Until then: optimistic DONE.
     try:
-        from brain_core.reconciler.merge import fast_forward_or_stage
-        from brain_core.sandbox.worktree import reap_run
-        from brain_core.sandbox.lifecycle import BARE_REPO
-
         outcome_state = await fast_forward_or_stage(handle, outcome, bare_repo=BARE_REPO)
+    except Exception:
+        logger.exception("reconciler crashed for run_id=%s", fresh.id)
+        outcome_state = RunState.FAILED
+
+    try:
         await reap_run(handle, bare_repo=BARE_REPO,
                        delete_branch=(outcome_state == RunState.DONE))
-        await transition_state(fresh.id, outcome_state)
-    except ImportError:
-        # Reconciler not yet in place — W1 Phase I → J bridge
-        await transition_state(fresh.id, RunState.DONE)
+    except Exception:
+        logger.exception("reap_run failed for run_id=%s", fresh.id)
+
+    await transition_state(fresh.id, outcome_state)
