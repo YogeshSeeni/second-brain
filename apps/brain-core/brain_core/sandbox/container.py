@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -30,6 +31,8 @@ def build_docker_run_args(
     prompt: str,
     prompt_family: str,
     model: str,
+    uid: int | None = None,
+    gid: int | None = None,
 ) -> list[str]:
     # The worktree's .git file is a pointer of the form
     #   gitdir: <bare_repo>/worktrees/<wt-name>
@@ -39,9 +42,16 @@ def build_docker_run_args(
     # /tmp -> /private/tmp, so a caller passing `/tmp/foo` will see git store
     # `/private/tmp/foo` in the .git pointer — we resolve here to match.
     bare_resolved = bare_repo.resolve()
+    # cap_drop=ALL removes DAC_OVERRIDE, so root inside the container can't
+    # bypass file permissions on the host-owned bind mounts. Run as the host
+    # user that owns the worktree (defaults to the brain-core process owner)
+    # so writes to /workspace and the bare repo succeed without elevated caps.
+    eff_uid = uid if uid is not None else os.getuid()
+    eff_gid = gid if gid is not None else os.getgid()
     return [
         "docker", "run", "--rm", "-i",
         "--name", f"brain-run-{run_id}",
+        "--user", f"{eff_uid}:{eff_gid}",
         "--cpus=1.0",
         "--memory=512m",
         "--memory-swap=512m",

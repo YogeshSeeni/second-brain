@@ -12,6 +12,8 @@ def test_args_include_resource_caps(tmp_path: Path):
         prompt="hi",
         prompt_family="t",
         model="claude-sonnet-4-6",
+        uid=1000,
+        gid=1000,
     )
     joined = " ".join(args)
     assert "--cpus=1.0" in joined
@@ -20,6 +22,7 @@ def test_args_include_resource_caps(tmp_path: Path):
     assert "--network=brain-runs" in joined
     assert "--security-opt no-new-privileges" in joined
     assert "--cap-drop=ALL" in joined
+    assert "--user 1000:1000" in joined
     assert str(tmp_path / "wt") in joined
     assert "BRAIN_RUN_ID=r1" in joined
     assert "BRAIN_PROMPT_FAMILY=t" in joined
@@ -36,6 +39,8 @@ def test_args_envvars_are_individual_flags(tmp_path: Path):
         prompt="hi",
         prompt_family="t",
         model="claude-sonnet-4-6",
+        uid=1000,
+        gid=1000,
     )
     # Each env var is passed as two args: "-e", "KEY=VALUE"
     env_flags = [i for i, a in enumerate(args) if a == "-e"]
