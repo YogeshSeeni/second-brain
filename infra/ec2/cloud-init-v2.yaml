@@ -1,0 +1,141 @@
+#cloud-config
+# brain-v1 cloud-init v2 — self-healing spot-replacement bootstrap.
+#
+# Sequence:
+#   1. Install OS packages (git, docker, unzip, python venv).
+#   2. Install awscli v2 (not in ubuntu apt).
+#   3. Self-attach the persistent brain-state EBS volume by tag, format
+#      if fresh, mount at /var/brain, and persist via fstab.
+#   4. Run /var/brain/infra/ec2/bootstrap.sh — the app-layer bootstrap
+#      that installs uv, syncs the venv, fetches Claude creds from
+#      Secrets Manager, writes /etc/brain/brain-core.env, installs
+#      systemd units, builds the brain-worker docker image, and starts
+#      brain-core + claude-creds-sync.
+#
+# Every step is idempotent. A fresh spot replacement ends up with the
+# same running stack as a reboot of the previous instance — all the
+# heavy state (repo, venv, sqlite, vault.git) survives on the EBS, and
+# only the ephemeral pieces on the root volume (creds, systemd units,
+# docker image, docker network) get rebuilt.
+#
+# Requires (granted by brain-runtime-v1 instance policy):
+#   - ec2:DescribeVolumes + ec2:AttachVolume on the persistent vol
+#   - secretsmanager:GetSecretValue on brain/claude_credentials
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - jq
+  - python3-pip
+  - python3-venv
+  - docker.io
+  - unzip
+  - xfsprogs
+  - curl
+
+write_files:
+  - path: /etc/brain/version
+    content: "v2.0-self-healing"
+    permissions: '0644'
+
+  - path: /usr/local/bin/install-aws-cli.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if command -v aws >/dev/null 2>&1; then exit 0; fi
+      cd /tmp
+      ARCH=$(uname -m)
+      case "$ARCH" in
+        aarch64) URL=https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip ;;
+        x86_64)  URL=https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip ;;
+        *) echo "unsupported arch $ARCH" >&2; exit 1 ;;
+      esac
+      curl -fsSL "$URL" -o awscliv2.zip
+      unzip -q awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+
+  - path: /usr/local/bin/mount-brain-state.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Self-attach the persistent brain-state EBS by tag, then mount it.
+      # Safe to run on a warm box (attach is a no-op if already attached).
+      #
+      # IMDSv2 is required on this launch template (http_tokens=required in
+      # spot.tf), so we must fetch a session token before any metadata call.
+      # The previous version used IMDSv1-style unauthenticated curls which
+      # silently failed under `set -e` and left /var/brain unmounted.
+      TOKEN=$(curl -fsX PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+      REGION=$(curl -fs -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/placement/region)
+      IID=$(curl -fs -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/instance-id)
+
+      VOL=$(aws ec2 describe-volumes --region "$REGION" \
+        --filters "Name=tag:Role,Values=persistent-state-v1" \
+        --query 'Volumes[0].VolumeId' --output text)
+      if [ -z "$VOL" ] || [ "$VOL" = "None" ]; then
+        echo "brain-state volume not found by tag Role=persistent-state-v1" >&2
+        exit 1
+      fi
+
+      ATTACHED_TO=$(aws ec2 describe-volumes --region "$REGION" --volume-ids "$VOL" \
+        --query 'Volumes[0].Attachments[0].InstanceId' --output text)
+      if [ "$ATTACHED_TO" != "$IID" ]; then
+        if [ "$ATTACHED_TO" != "None" ] && [ -n "$ATTACHED_TO" ]; then
+          echo "brain-state attached to $ATTACHED_TO, refusing to steal" >&2
+          exit 1
+        fi
+        aws ec2 attach-volume --region "$REGION" --volume-id "$VOL" \
+          --instance-id "$IID" --device /dev/sdf
+        # Wait up to 60s for the device node to surface
+        for i in $(seq 1 30); do
+          DEV=$(lsblk -ndo NAME,SIZE,TYPE | awk '$3=="disk" && $2=="200G" {print "/dev/"$1; exit}')
+          [ -n "$DEV" ] && break
+          sleep 2
+        done
+      fi
+
+      DEV=$(lsblk -ndo NAME,SIZE,TYPE | awk '$3=="disk" && $2=="200G" {print "/dev/"$1; exit}')
+      if [ -z "$DEV" ]; then
+        echo "brain-state volume not present in lsblk after attach" >&2
+        exit 1
+      fi
+
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        mkfs.xfs -L brain-state "$DEV"
+      fi
+      mkdir -p /var/brain
+      mountpoint -q /var/brain || mount "$DEV" /var/brain
+      grep -q '/var/brain' /etc/fstab \
+        || echo "LABEL=brain-state /var/brain xfs defaults,nofail 0 2" >> /etc/fstab
+      mkdir -p /var/brain/{vault.git,worktrees,db,scratch,config,logs}
+      chown -R ubuntu:ubuntu /var/brain
+
+  - path: /usr/local/bin/run-app-bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Invoked after the persistent volume is mounted. Delegates to the
+      # in-repo bootstrap so the app-layer logic lives in git, not in
+      # cloud-init — edits take effect on the next rotation.
+      SCRIPT=/var/brain/infra/ec2/bootstrap.sh
+      if [ ! -x "$SCRIPT" ]; then
+        echo "bootstrap script missing at $SCRIPT" >&2
+        exit 1
+      fi
+      bash "$SCRIPT"
+
+runcmd:
+  - [ systemctl, enable, --now, docker ]
+  - [ usermod, -aG, docker, ubuntu ]
+  - [ /usr/local/bin/install-aws-cli.sh ]
+  - [ /usr/local/bin/mount-brain-state.sh ]
+  - [ /usr/local/bin/run-app-bootstrap.sh ]

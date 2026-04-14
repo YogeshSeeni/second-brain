@@ -74,7 +74,7 @@ resource "aws_launch_template" "brain_v1" {
 
   vpc_security_group_ids = [aws_security_group.brain.id]
 
-  user_data = base64encode(file("${path.module}/../ec2/cloud-init-v1.yaml"))
+  user_data = base64encode(file("${path.module}/../ec2/cloud-init-v2.yaml"))
 
   block_device_mappings {
     device_name = "/dev/sda1"
@@ -127,7 +127,19 @@ resource "aws_autoscaling_group" "brain_v1" {
         launch_template_id = aws_launch_template.brain_v1.id
         version            = "$Latest"
       }
+      # Diversify instance types so a single-AZ capacity shortfall on one
+      # size doesn't wedge the ASG. All ARM Graviton, all broadly comparable
+      # to t4g.large — capacity-optimized strategy picks the cheapest
+      # available at launch time. The persistent EBS is AZ-locked to
+      # us-west-2a, so multi-AZ is not an option without a snapshot+migrate.
       override { instance_type = "t4g.large" }
+      override { instance_type = "t4g.xlarge" }
+      override { instance_type = "m6g.large" }
+      override { instance_type = "m6g.xlarge" }
+      override { instance_type = "c6g.large" }
+      override { instance_type = "c6g.xlarge" }
+      override { instance_type = "m7g.large" }
+      override { instance_type = "c7g.large" }
     }
   }
 
