@@ -12,6 +12,7 @@ from .types import (
     RunState,
     TriggerSource,
 )
+from .submit import submit
 
 __all__ = [
     "Run",
@@ -20,4 +21,5 @@ __all__ = [
     "Priority",
     "AgentClass",
     "TriggerSource",
+    "submit",
 ]
