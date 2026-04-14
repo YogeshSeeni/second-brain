@@ -3,9 +3,9 @@ resource "aws_iam_role" "brain_instance_v1" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -49,9 +49,9 @@ resource "aws_iam_role_policy" "brain_runtime_v1" {
         Resource = "*"
       },
       {
-        Sid    = "AttachBrainVolume"
-        Effect = "Allow"
-        Action = ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DescribeVolumes"]
+        Sid      = "AttachBrainVolume"
+        Effect   = "Allow"
+        Action   = ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DescribeVolumes"]
         Resource = "*"
       },
     ]
