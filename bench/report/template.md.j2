@@ -1,0 +1,23 @@
+# brain-v1 benchmark report — {{ cfg.profile.value }}
+
+**Date:** {{ generated_at }}
+**Profile:** `{{ cfg.profile.value }}`
+**Concurrency:** {{ cfg.concurrency }}
+**Duration:** {{ cfg.duration_sec }}s
+**Commit:** `{{ commit_sha }}`
+
+## Summary
+
+| Metric | Value |
+|---|---|
+| Total submissions | {{ submissions }} |
+| Runs completed | {{ completed }} |
+| Runs failed | {{ failed }} |
+| Success rate | {{ success_rate }}% |
+| Avg end-to-end latency (ms) | {{ avg_latency_ms }} |
+| P95 end-to-end latency (ms) | {{ p95_latency_ms }} |
+| Prompt cache hit ratio | {{ cache_hit_ratio }}% |
+
+## Notes
+
+{{ notes }}
