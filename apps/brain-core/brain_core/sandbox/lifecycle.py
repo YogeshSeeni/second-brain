@@ -32,7 +32,14 @@ WORKER_IMAGE  = os.environ.get("BRAIN_WORKER_IMAGE", "brain-worker:v1")
 
 async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
                   ) -> tuple[WorktreeHandle, RunOutcome]:
-    """Prepare, start, stream, return. The caller is responsible for reconcile + reap."""
+    """Prepare, start, stream, return. The caller is responsible for reconcile + reap.
+
+    Once the worktree has been created, this function ALWAYS returns the handle —
+    even if the container fails to start or the stream drain blows up. Re-raising
+    after prepare_run would orphan the worktree+branch in the caller. Failures
+    after prepare_run are surfaced as a RunOutcome with exit_code=-1, so the
+    reconciler short-circuits to FAILED and the caller still calls reap_run.
+    """
     handle = await prepare_run(
         run_id=run_id,
         bare_repo=BARE_REPO,
@@ -40,44 +47,54 @@ async def execute(*, run_id: str, prompt: str, prompt_family: str, model: str
         scratch_root=SCRATCH_ROOT,
     )
 
-    _, stdout_iter, proc = await start_run(
-        run_id=run_id,
-        image=WORKER_IMAGE,
-        worktree_path=handle.worktree_path,
-        scratch_path=handle.scratch_path,
-        bare_repo=BARE_REPO,
-        prompt=prompt,
-        prompt_family=prompt_family,
-        model=model,
-    )
+    try:
+        _, stdout_iter, proc = await start_run(
+            run_id=run_id,
+            image=WORKER_IMAGE,
+            worktree_path=handle.worktree_path,
+            scratch_path=handle.scratch_path,
+            bare_repo=BARE_REPO,
+            prompt=prompt,
+            prompt_family=prompt_family,
+            model=model,
+        )
 
-    # Drain stdout and stderr concurrently. If we drain stdout-then-stderr
-    # sequentially, a child that writes >64KB to stderr blocks on its pipe
-    # buffer, never closes stdout, and we hang forever on the stdout iterator.
-    async def _drain_stdout() -> list[bytes]:
-        return [line async for line in stdout_iter]
+        # Drain stdout and stderr concurrently. If we drain stdout-then-stderr
+        # sequentially, a child that writes >64KB to stderr blocks on its pipe
+        # buffer, never closes stdout, and we hang forever on the stdout iterator.
+        async def _drain_stdout() -> list[bytes]:
+            return [line async for line in stdout_iter]
 
-    async def _drain_stderr() -> bytes:
-        if proc.stderr is None:
-            return b""
-        return await proc.stderr.read()
+        async def _drain_stderr() -> bytes:
+            if proc.stderr is None:
+                return b""
+            return await proc.stderr.read()
 
-    lines, stderr_bytes = await asyncio.gather(_drain_stdout(), _drain_stderr())
-    exit_code = await proc.wait()
-    stderr = stderr_bytes.decode(errors="replace")
+        lines, stderr_bytes = await asyncio.gather(_drain_stdout(), _drain_stderr())
+        exit_code = await proc.wait()
+        stderr = stderr_bytes.decode(errors="replace")
 
-    parsed = parse_stream_json(lines)
+        parsed = parse_stream_json(lines)
 
-    outcome = RunOutcome(
-        run_id=run_id,
-        exit_code=exit_code,
-        final_text=parsed.final_text,
-        input_tokens=parsed.input_tokens,
-        output_tokens=parsed.output_tokens,
-        cache_read_tokens=parsed.cache_read_tokens,
-        cache_write_tokens=parsed.cache_write_tokens,
-        stream_events=parsed.events,
-        error_detail=stderr if exit_code != 0 else None,
-        error_class="docker_nonzero_exit" if exit_code != 0 else None,
-    )
-    return handle, outcome
+        outcome = RunOutcome(
+            run_id=run_id,
+            exit_code=exit_code,
+            final_text=parsed.final_text,
+            input_tokens=parsed.input_tokens,
+            output_tokens=parsed.output_tokens,
+            cache_read_tokens=parsed.cache_read_tokens,
+            cache_write_tokens=parsed.cache_write_tokens,
+            stream_events=parsed.events,
+            error_detail=stderr if exit_code != 0 else None,
+            error_class="docker_nonzero_exit" if exit_code != 0 else None,
+        )
+        return handle, outcome
+    except Exception as exc:
+        logger.exception("sandbox.execute failed after prepare_run for run_id=%s", run_id)
+        outcome = RunOutcome(
+            run_id=run_id,
+            exit_code=-1,
+            error_class="sandbox_exec_failed",
+            error_detail=f"{type(exc).__name__}: {exc}",
+        )
+        return handle, outcome

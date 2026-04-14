@@ -72,9 +72,17 @@ async def run_one(run: Run) -> None:
             logger.exception("reconciler crashed for run_id=%s", fresh.id)
             outcome_state = RunState.FAILED
 
+        # Delete the branch for both DONE (merged into main) and FAILED runs.
+        # Failed runs have nothing recoverable on the branch — keeping them
+        # accumulates ref garbage that eventually breaks `git worktree add`
+        # for new runs (we have seen 500+ leaked branches in bench loops).
+        # CONFLICTED branches stay alive because they hold real staged work
+        # that a human or replay loop may want to inspect.
         try:
-            await reap_run(handle, bare_repo=BARE_REPO,
-                           delete_branch=(outcome_state == RunState.DONE))
+            await reap_run(
+                handle, bare_repo=BARE_REPO,
+                delete_branch=(outcome_state in (RunState.DONE, RunState.FAILED)),
+            )
         except Exception:
             logger.exception("reap_run failed for run_id=%s", fresh.id)
 

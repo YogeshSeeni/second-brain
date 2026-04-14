@@ -2,8 +2,8 @@ import asyncio
 import pytest
 from pathlib import Path
 
+from brain_core.sandbox import WorktreeHandle, lifecycle
 from brain_core.sandbox.worktree import prepare_run, reap_run
-from brain_core.sandbox import WorktreeHandle
 
 
 @pytest.mark.asyncio
@@ -61,3 +61,42 @@ async def test_reap_run_deletes_branch_when_requested(temp_git_repo: Path):
     import subprocess as sp
     branches = sp.check_output(["git", "-C", str(bare), "branch"]).decode()
     assert "agent/run-r2" not in branches
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_handle_when_start_run_raises(
+    temp_git_repo: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression: if start_run raises after prepare_run created the worktree,
+    execute() must still return the handle so the caller can reap. Re-raising
+    leaks the worktree+branch (we have seen 500+ leaked branches in bench loops)."""
+    monkeypatch.setattr(lifecycle, "BARE_REPO", temp_git_repo / "vault.git")
+    monkeypatch.setattr(lifecycle, "WORKTREE_ROOT", temp_git_repo / "worktrees")
+    monkeypatch.setattr(lifecycle, "SCRATCH_ROOT", temp_git_repo / "scratch")
+
+    async def boom(**_kwargs):
+        raise RuntimeError("docker daemon not reachable")
+
+    monkeypatch.setattr(lifecycle, "start_run", boom)
+
+    handle, outcome = await lifecycle.execute(
+        run_id="leak-canary",
+        prompt="hi",
+        prompt_family="smoke",
+        model="claude-sonnet-4-5",
+    )
+    assert handle is not None
+    assert handle.branch_name == "agent/run-leak-canary"
+    assert handle.worktree_path.exists()
+    assert outcome.exit_code == -1
+    assert outcome.error_class == "sandbox_exec_failed"
+    assert "docker daemon" in (outcome.error_detail or "")
+
+    # Caller can now reap cleanly — the whole point of the fix.
+    await reap_run(handle, bare_repo=temp_git_repo / "vault.git", delete_branch=True)
+    assert not handle.worktree_path.exists()
+    import subprocess as sp
+    branches = sp.check_output(
+        ["git", "-C", str(temp_git_repo / "vault.git"), "branch"]
+    ).decode()
+    assert "agent/run-leak-canary" not in branches
