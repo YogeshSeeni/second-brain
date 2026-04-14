@@ -8,5 +8,5 @@ Type=oneshot
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/var/brain/vault-data
-Environment=GIT_SSH_COMMAND=ssh -i /home/ubuntu/.ssh/second-brain-vault -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
+Environment="GIT_SSH_COMMAND=ssh -i /home/ubuntu/.ssh/second-brain-vault -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 ExecStart=/usr/bin/git -C /var/brain/vault-data pull --ff-only --quiet
