@@ -1,6 +1,6 @@
 # 0007 — Worker container rides on Claude Code subscription, not API key
 
-**Status:** Accepted
+**Status:** Accepted — mount model revised 2026-04-14 (see Revision below)
 **Date:** 2026-04-13
 **Deciders:** Yogesh Seenichamy
 
@@ -42,3 +42,32 @@ A separate, dedicated mount path (`/claude-home/`) is used instead of `/home/ubu
 ### Neutral
 - The default host path (`/home/ubuntu/.claude/.credentials.json`) is opinionated for the EC2 deployment; dev environments override via `BRAIN_CLAUDE_CREDS`
 - `CLAUDE_CREDENTIALS` joins the existing module-constant pattern (`BARE_REPO`, `WORKTREE_ROOT`, `SCRATCH_ROOT`, `WORKER_IMAGE`) — when Phase E gets to per-host config files this graduates to a proper config object
+
+## Revision 2026-04-14 — per-run writable claude-home, copy-back on success
+
+The original single-file read-only mount turned out to be **incompatible with the claude CLI runtime**, discovered during the first real end-to-end smoke test (run_id `feb3a873-d89e-49ec-b1e0-09de803c4833`, instance `i-0a8d3c48265333a65`). Two independent reasons:
+
+1. **Claude needs a writable `~/.claude/` for session state.** On every invocation the CLI writes `~/.claude.json`, `~/.claude/projects/<cwd>/<session>.jsonl`, and `~/.claude/backups/`. A read-only single-file mount leaves the parent directory unwritable. The process does not fail loudly — it blocks in an internal retry/lock loop (observed host-side as `wchan=ep_poll`, no open sockets, 0 CPU time, no stdout) until the run's 180 s timeout fires. Reproduced with a tmpfs `/claude-home` + readonly creds overlay.
+2. **Claude refreshes OAuth tokens in-process.** Real subscription auth uses rotating refresh tokens; every run can rotate the token pair. A read-only mount forces a refresh attempt to fail silently. Observationally, our host creds expired ~1 day before the smoke test, and the hung container was actually trying (and failing) to refresh them. The original ADR assumption that "token refresh is handled host-side by the systemd `claude-creds-sync.timer`" was wrong — the timer is **push-only** (host→Secrets Manager), it does not refresh. In-container refresh is the only refresh that happens.
+
+### Revised mount model
+`lifecycle.execute()` now materializes a **per-run writable `claude-home` scratch** under the run's existing scratch directory (`{SCRATCH_ROOT}/run-<id>/claude-home/.claude/`), copies the host `CLAUDE_CREDENTIALS` file into it, and bind-mounts that directory RW at `/claude-home` in the container. After a successful run (`exit_code == 0`), the refreshed creds file is atomically copied back to the canonical host path via `os.replace`. `reap_run()` already deletes the scratch dir, so per-run isolation is automatic.
+
+```
+--mount type=bind,src=<scratch>/run-<id>/claude-home,dst=/claude-home
+-e HOME=/claude-home
+```
+
+The host-side `claude-creds-sync.timer` still pushes any host changes to Secrets Manager on its 5-minute cadence — it just observes refreshes that came from the container instead of refreshes that came from a bare-metal `claude -p`. Semantics for external observers (EC2 spot rotation → bootstrap.sh pulls from Secrets Manager) are unchanged.
+
+### Why this preserves the sandbox boundary
+- The container still only sees a `.credentials.json` file under its isolated `/claude-home`, nothing else from the host's real `~/.claude/`.
+- The scratch dir lives under `SCRATCH_ROOT`, which is already subject to `reap_run` cleanup — no long-lived writable state escapes the run.
+- `cap_drop=ALL` + `no-new-privileges` + uid 1000 still prevent escalation to other host files.
+- Concurrent runs do not share a claude-home: each gets its own scratch.
+
+### Concurrency note
+Two concurrent runs will each refresh the same starting refresh token. Whoever copies back first wins; the loser silently overwrites the winner on `os.replace`. In practice we expect the last-writer-wins semantics to match the host-side serialized behavior well enough for W1 bench loops — if rotation rate ever outpaces run concurrency we will add a file lock around `_propagate_refreshed_creds`.
+
+### Rejected option — drop subscription for API key
+Briefly reconsidered during debugging: would avoid the entire refresh-token rotation surface. Still rejected for the same reason as the original: metered spend, second credential to rotate. The writable-home fix is ~30 lines of Python.

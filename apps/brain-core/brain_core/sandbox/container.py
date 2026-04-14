@@ -28,7 +28,7 @@ def build_docker_run_args(
     worktree_path: Path,
     scratch_path: Path,
     bare_repo: Path,
-    claude_credentials: Path,
+    claude_home: Path,
     prompt: str,
     prompt_family: str,
     model: str,
@@ -49,12 +49,14 @@ def build_docker_run_args(
     # so writes to /workspace and the bare repo succeed without elevated caps.
     eff_uid = uid if uid is not None else os.getuid()
     eff_gid = gid if gid is not None else os.getgid()
-    # Mount the host's Claude OAuth credentials so the in-container `claude -p`
-    # rides on Yogesh's subscription instead of needing an ANTHROPIC_API_KEY.
-    # Read-only because token refresh is handled host-side by the systemd
-    # claude-creds-sync.timer pulling from Secrets Manager every 5 minutes —
-    # letting the container write back would race the host sync.
-    creds_resolved = claude_credentials.resolve()
+    # claude_home is a per-run writable scratch dir (prepared by lifecycle)
+    # containing a fresh copy of .claude/.credentials.json. Mounted RW at
+    # /claude-home so the in-container claude CLI can (a) write session state
+    # under ~/.claude/projects/ and ~/.claude.json and (b) refresh its own
+    # OAuth token in-place. lifecycle.execute() copies the refreshed file
+    # back to the host after a successful run so subsequent runs pick up
+    # the rotated token.
+    claude_home_resolved = claude_home.resolve()
     return [
         "docker", "run", "--rm", "-i",
         "--name", f"brain-run-{run_id}",
@@ -69,7 +71,7 @@ def build_docker_run_args(
         "--mount", f"type=bind,src={worktree_path},dst=/workspace",
         "--mount", f"type=bind,src={scratch_path},dst=/scratch",
         "--mount", f"type=bind,src={bare_resolved},dst={bare_resolved}",
-        "--mount", f"type=bind,src={creds_resolved},dst=/claude-home/.claude/.credentials.json,readonly",
+        "--mount", f"type=bind,src={claude_home_resolved},dst=/claude-home",
         "-e", "HOME=/claude-home",
         "-e", f"BRAIN_RUN_ID={run_id}",
         "-e", f"BRAIN_PROMPT={prompt}",
@@ -86,7 +88,7 @@ async def start_run(
     worktree_path: Path,
     scratch_path: Path,
     bare_repo: Path,
-    claude_credentials: Path,
+    claude_home: Path,
     prompt: str,
     prompt_family: str,
     model: str,
@@ -103,7 +105,7 @@ async def start_run(
         worktree_path=worktree_path,
         scratch_path=scratch_path,
         bare_repo=bare_repo,
-        claude_credentials=claude_credentials,
+        claude_home=claude_home,
         prompt=prompt,
         prompt_family=prompt_family,
         model=model,

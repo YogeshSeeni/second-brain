@@ -9,7 +9,7 @@ def test_args_include_resource_caps(tmp_path: Path):
         worktree_path=tmp_path / "wt",
         scratch_path=tmp_path / "sc",
         bare_repo=tmp_path / "vault.git",
-        claude_credentials=tmp_path / "creds.json",
+        claude_home=tmp_path / "claude-home",
         prompt="hi",
         prompt_family="t",
         model="claude-sonnet-4-6",
@@ -37,7 +37,7 @@ def test_args_envvars_are_individual_flags(tmp_path: Path):
         worktree_path=tmp_path / "wt",
         scratch_path=tmp_path / "sc",
         bare_repo=tmp_path / "vault.git",
-        claude_credentials=tmp_path / "creds.json",
+        claude_home=tmp_path / "claude-home",
         prompt="hi",
         prompt_family="t",
         model="claude-sonnet-4-6",
@@ -51,13 +51,15 @@ def test_args_envvars_are_individual_flags(tmp_path: Path):
     assert any(v.startswith("BRAIN_PROMPT=") for v in env_vars)
 
 
-def test_claude_credentials_mounted_readonly_with_home_override(tmp_path: Path):
-    """The worker rides on Yogesh's Claude subscription, so the host's OAuth
-    credentials file is bind-mounted read-only and HOME is steered at it.
-    Without this, `claude -p` inside the container would have nowhere to find
-    a token and every run would fail with auth errors (ADR 0007)."""
-    creds = tmp_path / "fake-creds.json"
-    creds.write_text("{}")
+def test_claude_home_mounted_rw_with_home_override(tmp_path: Path):
+    """The worker rides on Yogesh's Claude subscription, so a per-run writable
+    claude-home is bind-mounted at /claude-home and HOME is steered at it.
+    The claude CLI needs a writable ~/.claude/ for session state and refreshes
+    OAuth tokens in-place; a read-only single-file mount would hang the CLI
+    silently on its first write (see ADR 0007, revised)."""
+    home = tmp_path / "claude-home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}")
 
     args = build_docker_run_args(
         run_id="r1",
@@ -65,7 +67,7 @@ def test_claude_credentials_mounted_readonly_with_home_override(tmp_path: Path):
         worktree_path=tmp_path / "wt",
         scratch_path=tmp_path / "sc",
         bare_repo=tmp_path / "vault.git",
-        claude_credentials=creds,
+        claude_home=home,
         prompt="hi",
         prompt_family="t",
         model="claude-sonnet-4-6",
@@ -73,14 +75,12 @@ def test_claude_credentials_mounted_readonly_with_home_override(tmp_path: Path):
         gid=1000,
     )
 
-    # The credentials mount must be present, point at the resolved host file,
-    # land at the well-known in-container path, and be read-only.
-    expected = (
-        f"type=bind,src={creds.resolve()},"
-        f"dst=/claude-home/.claude/.credentials.json,readonly"
-    )
+    # The claude-home mount must be present, point at the resolved host dir,
+    # land at /claude-home, and NOT be read-only (tokens are refreshed in-place).
+    expected = f"type=bind,src={home.resolve()},dst=/claude-home"
     mount_flags = [args[i + 1] for i, a in enumerate(args) if a == "--mount"]
     assert expected in mount_flags
+    assert not any("readonly" in m and "/claude-home" in m for m in mount_flags)
 
     # HOME must point at the mount root so `claude` finds .claude/.credentials.json.
     env_flags = [args[i + 1] for i, a in enumerate(args) if a == "-e"]

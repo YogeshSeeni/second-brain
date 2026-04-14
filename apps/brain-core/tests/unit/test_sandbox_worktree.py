@@ -73,6 +73,12 @@ async def test_execute_returns_handle_when_start_run_raises(
     monkeypatch.setattr(lifecycle, "BARE_REPO", temp_git_repo / "vault.git")
     monkeypatch.setattr(lifecycle, "WORKTREE_ROOT", temp_git_repo / "worktrees")
     monkeypatch.setattr(lifecycle, "SCRATCH_ROOT", temp_git_repo / "scratch")
+    # _prepare_claude_home reads CLAUDE_CREDENTIALS; point it at a fake file
+    # so the "docker raises" path under test is what actually blows up,
+    # not a FileNotFoundError from the default host creds path.
+    fake_creds = temp_git_repo / "fake-creds.json"
+    fake_creds.write_text("{}")
+    monkeypatch.setattr(lifecycle, "CLAUDE_CREDENTIALS", fake_creds)
 
     async def boom(**_kwargs):
         raise RuntimeError("docker daemon not reachable")
