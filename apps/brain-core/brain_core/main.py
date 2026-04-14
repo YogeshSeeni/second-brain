@@ -9,7 +9,8 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 from . import agent, capture, dashboard, db, inbox, jobs, thesis, tick, watcher
@@ -42,6 +43,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus scrape endpoint. Plain GET (no redirect) so scrapers don't
+    pay a 307 round-trip on every interval."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 class ChatRequest(BaseModel):

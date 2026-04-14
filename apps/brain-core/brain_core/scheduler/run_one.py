@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
+from brain_core.metrics import (
+    brain_run_duration_seconds,
+    brain_runs_in_flight,
+    brain_runs_total,
+)
 from brain_core.reconciler.merge import fast_forward_or_stage
 from brain_core.sandbox import lifecycle
 from brain_core.sandbox.lifecycle import BARE_REPO
@@ -32,39 +38,58 @@ async def run_one(run: Run) -> None:
     prompt = payload.get("prompt", "")
     model  = payload.get("model", "claude-sonnet-4-5")
 
+    agent_class = fresh.agent_class.value
+    trigger_source = fresh.trigger_source.value
+    started = time.monotonic()
+    terminal_state: RunState = RunState.FAILED
+
+    brain_runs_in_flight.inc()
     handle = None
     try:
-        handle, outcome = await lifecycle.execute(
-            run_id=fresh.id,
-            prompt=prompt,
-            prompt_family=fresh.prompt_family,
-            model=model,
-        )
-    except Exception:
-        logger.exception("sandbox.execute crashed for run_id=%s", fresh.id)
-        await transition_state(fresh.id, RunState.FAILED)
-        # If prepare_run succeeded but a later step raised, the worktree is
-        # orphaned. Reap it but keep the branch — the W2 three-way path or
-        # manual recovery may want to inspect it.
-        if handle is not None:
-            try:
-                await reap_run(handle, bare_repo=BARE_REPO, delete_branch=False)
-            except Exception:
-                logger.exception("reap_run cleanup failed for run_id=%s", fresh.id)
-        return
+        try:
+            handle, outcome = await lifecycle.execute(
+                run_id=fresh.id,
+                prompt=prompt,
+                prompt_family=fresh.prompt_family,
+                model=model,
+            )
+        except Exception:
+            logger.exception("sandbox.execute crashed for run_id=%s", fresh.id)
+            await transition_state(fresh.id, RunState.FAILED)
+            if handle is not None:
+                try:
+                    await reap_run(handle, bare_repo=BARE_REPO, delete_branch=False)
+                except Exception:
+                    logger.exception("reap_run cleanup failed for run_id=%s", fresh.id)
+            terminal_state = RunState.FAILED
+            return
 
-    await transition_state(fresh.id, RunState.RECONCILING)
+        await transition_state(fresh.id, RunState.RECONCILING)
 
-    try:
-        outcome_state = await fast_forward_or_stage(handle, outcome, bare_repo=BARE_REPO)
-    except Exception:
-        logger.exception("reconciler crashed for run_id=%s", fresh.id)
-        outcome_state = RunState.FAILED
+        try:
+            outcome_state = await fast_forward_or_stage(handle, outcome, bare_repo=BARE_REPO)
+        except Exception:
+            logger.exception("reconciler crashed for run_id=%s", fresh.id)
+            outcome_state = RunState.FAILED
 
-    try:
-        await reap_run(handle, bare_repo=BARE_REPO,
-                       delete_branch=(outcome_state == RunState.DONE))
-    except Exception:
-        logger.exception("reap_run failed for run_id=%s", fresh.id)
+        try:
+            await reap_run(handle, bare_repo=BARE_REPO,
+                           delete_branch=(outcome_state == RunState.DONE))
+        except Exception:
+            logger.exception("reap_run failed for run_id=%s", fresh.id)
 
-    await transition_state(fresh.id, outcome_state)
+        await transition_state(fresh.id, outcome_state)
+        terminal_state = outcome_state
+    finally:
+        brain_runs_in_flight.dec()
+        elapsed = time.monotonic() - started
+        state_label = terminal_state.value
+        brain_runs_total.labels(
+            state=state_label,
+            agent_class=agent_class,
+            trigger_source=trigger_source,
+        ).inc()
+        brain_run_duration_seconds.labels(
+            state=state_label,
+            agent_class=agent_class,
+        ).observe(elapsed)

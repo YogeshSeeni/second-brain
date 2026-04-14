@@ -10,6 +10,7 @@ from __future__ import annotations
 import aiosqlite
 
 from brain_core import db as _db
+from brain_core.metrics import brain_submissions_total
 from .queue import idempotency_key_for, insert_run
 from .types import RunSpec
 
@@ -32,4 +33,8 @@ async def submit(spec: RunSpec) -> str:
     if row is not None:
         return row["id"]
 
+    brain_submissions_total.labels(
+        agent_class=spec.agent_class.value,
+        trigger_source=spec.trigger_source.value,
+    ).inc()
     return await insert_run(spec, idempotency_key=key)
