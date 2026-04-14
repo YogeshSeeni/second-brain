@@ -9,11 +9,12 @@ from brain_core.scheduler import (
     TriggerSource,
 )
 from brain_core.scheduler.queue import (
+    finalize_run,
     idempotency_key_for,
     insert_run,
+    list_runs_by_state,
     load_run,
     transition_state,
-    list_runs_by_state,
 )
 
 
@@ -66,6 +67,49 @@ async def test_transition_state_updates_timestamps(temp_db: str, fake_clock):
     run = await load_run(run_id)
     assert run.state == RunState.ADMITTED
     assert run.admitted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_finalize_run_persists_outcome_fields(temp_db: str):
+    import aiosqlite
+    run_id = await insert_run(_spec(), idempotency_key="k-final")
+    await finalize_run(
+        run_id,
+        RunState.FAILED,
+        exit_code=1,
+        error_class="docker_nonzero_exit",
+        error_detail="boom",
+        actual_in=42,
+        actual_out=7,
+    )
+    async with aiosqlite.connect(temp_db) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT state, exit_code, error_class, error_detail, actual_in, actual_out, ended_at "
+            "FROM run_queue WHERE id = ?",
+            (run_id,),
+        )
+        row = await cur.fetchone()
+    assert row["state"] == RunState.FAILED.value
+    assert row["exit_code"] == 1
+    assert row["error_class"] == "docker_nonzero_exit"
+    assert row["error_detail"] == "boom"
+    assert row["actual_in"] == 42
+    assert row["actual_out"] == 7
+    assert row["ended_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_finalize_run_truncates_long_error_detail(temp_db: str):
+    import aiosqlite
+    run_id = await insert_run(_spec(), idempotency_key="k-trunc")
+    big = "x" * 10_000
+    await finalize_run(run_id, RunState.FAILED, exit_code=1, error_detail=big)
+    async with aiosqlite.connect(temp_db) as conn:
+        cur = await conn.execute("SELECT error_detail FROM run_queue WHERE id = ?", (run_id,))
+        (detail,) = await cur.fetchone()
+    assert detail is not None
+    assert len(detail) == 4096
 
 
 @pytest.mark.asyncio

@@ -107,6 +107,56 @@ async def transition_state(run_id: str, new_state: RunState) -> None:
         await conn.commit()
 
 
+async def finalize_run(
+    run_id: str,
+    new_state: RunState,
+    *,
+    exit_code: int | None = None,
+    error_class: str | None = None,
+    error_detail: str | None = None,
+    actual_in: int | None = None,
+    actual_out: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+) -> None:
+    # Persist outcome fields and move to a terminal state in one UPDATE so a
+    # crash between the two can't leave a done/failed row with no exit info.
+    # error_detail is truncated to 4 KiB — we only want the head of stderr,
+    # not the full stream that may include secrets or megabytes of trace.
+    now = int(time.time())
+    if error_detail is not None and len(error_detail) > 4096:
+        error_detail = error_detail[:4096]
+    async with aiosqlite.connect(_db._db_path()) as conn:
+        await conn.execute(
+            """
+            UPDATE run_queue SET
+                state             = ?,
+                ended_at          = COALESCE(ended_at, ?),
+                exit_code         = ?,
+                error_class       = ?,
+                error_detail      = ?,
+                actual_in         = COALESCE(?, actual_in),
+                actual_out        = COALESCE(?, actual_out),
+                cache_read_tokens = COALESCE(?, cache_read_tokens),
+                cache_write_tokens = COALESCE(?, cache_write_tokens)
+            WHERE id = ?
+            """,
+            (
+                new_state.value,
+                now,
+                exit_code,
+                error_class,
+                error_detail,
+                actual_in,
+                actual_out,
+                cache_read_tokens,
+                cache_write_tokens,
+                run_id,
+            ),
+        )
+        await conn.commit()
+
+
 async def list_runs_by_state(state: RunState, *, limit: int = 50) -> list[Run]:
     async with aiosqlite.connect(_db._db_path()) as conn:
         conn.row_factory = aiosqlite.Row
