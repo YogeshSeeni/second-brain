@@ -11,6 +11,16 @@ raw/
 wiki/
 output/
 
+# brain-v1 EBS runtime layout — these dirs are created by cloud-init at the
+# /var/brain mount root and coexist with the repo checkout. Ignoring them at
+# the repo root keeps `git status` clean on the live instance.
+/vault.git/
+/worktrees/
+/db/
+/scratch/
+/config/
+/logs/
+
 # Secrets — never commit
 .claude/settings.json
 .claude/settings.local.json
