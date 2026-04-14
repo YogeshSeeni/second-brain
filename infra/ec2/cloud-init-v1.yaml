@@ -1,0 +1,46 @@
+#cloud-config
+# brain-v1 cloud-init — runs on first boot + every Spot replacement.
+# Idempotent: all steps safe to re-run.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - jq
+  - python3-pip
+  - python3-venv
+  - docker.io
+  - unzip
+  - xfsprogs
+
+write_files:
+  - path: /etc/brain/version
+    content: "v1.0-foundations"
+    permissions: '0644'
+
+  - path: /usr/local/bin/mount-brain-state.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Find the attached brain-state volume (tagged Role=persistent-state-v1) by
+      # the filesystem label we stamp on first boot.
+      DEV=$(lsblk -ndo NAME,SIZE,TYPE | awk '$3=="disk" && $2=="200G" {print "/dev/"$1; exit}')
+      if [ -z "$DEV" ]; then
+        echo "brain-state volume not found" >&2; exit 1
+      fi
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        mkfs.xfs -L brain-state "$DEV"
+      fi
+      mkdir -p /var/brain
+      mountpoint -q /var/brain || mount "$DEV" /var/brain
+      grep -q '/var/brain' /etc/fstab || echo "LABEL=brain-state /var/brain xfs defaults,nofail 0 2" >> /etc/fstab
+      mkdir -p /var/brain/{vault.git,worktrees,db,scratch,config,logs}
+      chown -R ubuntu:ubuntu /var/brain
+
+runcmd:
+  - [ systemctl, enable, --now, docker ]
+  - [ usermod, -aG, docker, ubuntu ]
+  - [ /usr/local/bin/mount-brain-state.sh ]
+  # grafana-agent + brain-core systemd install happens in Phase D and via Ansible-lite shell in bootstrap; this cloud-init only brings up the host.
